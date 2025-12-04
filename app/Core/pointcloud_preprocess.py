@@ -114,3 +114,25 @@ def preprocess_point_cloud(
     )
     pcd_proc.orient_normals_consistent_tangent_plane(50)
     return pcd_proc
+
+    """
+    Мягко сглаживает поверхность (Taubin) без сильного сплющивания формы.
+    iterations: 3–8 обычно достаточно для стен.
+    """
+def smooth_mesh_soft(
+    mesh: o3d.geometry.TriangleMesh,
+    iterations: int = 5,
+) -> o3d.geometry.TriangleMesh:
+    if len(mesh.triangles) == 0:
+        return mesh
+
+    mesh = mesh.filter_smooth_taubin(
+        number_of_iterations=iterations
+        # можно добавить lambda_filter, mu, если захочешь ещё тонкую настройку
+    )
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_unreferenced_vertices()
+    mesh.compute_vertex_normals()
+    return mesh
+

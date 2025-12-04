@@ -5,12 +5,13 @@ import open3d as o3d
 from Infrastructure.pointcloud_io import load_point_cloud_any
 from Infrastructure.output import save_step_geometry
 from UI.visualization import show_geometry
-from Core.pointcloud_preprocess import normalize_point_cloud, preprocess_point_cloud
+from Core.pointcloud_preprocess import normalize_point_cloud, preprocess_point_cloud, smooth_mesh_soft
 from Core.mesh_reconstruction import reconstruct_poisson, reconstruct_bpa
 from Core.mesh_postprocess import (
     straighten_slab_sides,
     remove_long_triangles,
     fill_all_holes,
+    fill_small_holes
 )
 
 """
@@ -67,17 +68,23 @@ def run_reconstruction(args) -> None:
         mesh_norm = mesh_norm.filter_smooth_taubin(number_of_iterations=1)
         mesh_norm.remove_degenerate_triangles()
         mesh_norm.compute_vertex_normals()
+        
         mesh_norm = straighten_slab_sides(
             mesh_norm,
             snap_ratio=0.25,
             thickness_ratio_threshold=0.25,
         )
+        
 
     # 4.1. Удаляем очень длинные треугольники-лучи
     mesh_norm = remove_long_triangles(mesh_norm, max_edge_ratio=0.3)
 
     # 4.2. Зашиваем все появившиеся дыры
     mesh_norm = fill_all_holes(mesh_norm)
+    #mesh_norm = fill_small_holes(mesh_norm, max_hole_vertices=40)
+
+    # 4.3. Финальное мягкое сглаживание поверхности
+    mesh_norm = smooth_mesh_soft(mesh_norm, iterations=5)
 
     if args.show_steps:
         show_geometry(mesh_norm, "Step 4 - Mesh (normalized coords)")
