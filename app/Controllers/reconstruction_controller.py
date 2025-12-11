@@ -15,6 +15,7 @@ from Core.mesh_postprocess import (
     fill_two_largest_holes_with_grid,
     is_slab_like,
     smooth_slab_boundaries,
+    keep_largest_component,
 )
 
 
@@ -98,14 +99,22 @@ def run_reconstruction(args) -> None:
     # 4.1. Удаляем длинные лучи (для обоих методов)
     mesh_norm = remove_long_triangles(mesh_norm, max_edge_ratio=0.3)
 
-    # 4.2. Зашиваем мелкие дырки веером (краевые щёлки, артефакты)
-    mesh_norm = fill_small_holes(mesh_norm, max_hole_vertices=40)
+    # 4.2. Зашиваем только локальные маленькие петли (в т.ч. углы),
+    #      но не трогаем большие отверстия и периметр крышек
+    mesh_norm = fill_small_holes(
+        mesh_norm,
+        max_hole_vertices=None,   # не ограничиваем по числу вершин
+        max_area_ratio=0.01,      # 1% от "квадрата" модели, можно поиграть 0.005–0.02
+    )
+
+    # Удаляем все мелкие оторванные куски, оставляем только основной объект
+    mesh_norm = keep_largest_component(mesh_norm)
 
     # 4.3. Финальное мягкое сглаживание
     mesh_norm = smooth_mesh_soft(mesh_norm, iterations=5)
 
     if args.show_steps:
-        show_geometry(mesh_norm, "Step 4 - Mesh (normalized coords)")
+        show_geometry(mesh_norm, "Step 4 - Mesh (normalized coords)") 
     if args.save_steps:
         save_step_geometry(mesh_norm, out_path, "step4_mesh_norm")
 

@@ -88,24 +88,35 @@ def straighten_slab_sides(
     Зашивает дырки в меше:
     - находит граничные рёбра (у которых только один треугольник),
     - собирает по ним замкнутые петли,
-    - для каждой петли строит "веер" треугольников к центру.
+    - для каждой маленькой петли строит "веер" треугольников к центру.
 
     max_hole_vertices:
-        Если None — зашиваем ЛЮБЫЕ петли по границе (все дырки).
-        Если число — ограничиваемся только петлями не больше этого размера.
+        Если None — ограничение по количеству вершин не используется.
+        Если число — зашиваем только петли с числом вершин <= max_hole_vertices.
+
+    max_area_ratio:
+        Доп. фильтр по площади петли.
+        Площадь петли в проекции должна быть < max_area_ratio * (max_extent^2),
+        где max_extent — максимальный размер bbox модели.
+        Например: 0.0005 означает "дырка меньше 0.05% от площади модели".
     """
 def fill_small_holes(
     mesh: o3d.geometry.TriangleMesh,
-    max_hole_vertices: Optional[int] = None
+    max_hole_vertices: Optional[int] = None,
+    max_area_ratio: Optional[float] = None,
 ) -> o3d.geometry.TriangleMesh:
-    import numpy as np
-    from collections import defaultdict
-
     if len(mesh.triangles) == 0:
         return mesh
 
     verts = np.asarray(mesh.vertices)
     tris = np.asarray(mesh.triangles, dtype=np.int32)
+
+    # bbox для нормировки площади
+    bbox = mesh.get_axis_aligned_bounding_box()
+    extent = bbox.get_extent()
+    max_extent = float(np.max(extent))
+    if max_extent <= 0:
+        max_extent = 1.0
 
     # 1. считаем, сколько раз встречается каждое ребро
     edge_count = {}
@@ -164,22 +175,45 @@ def fill_small_holes(
     new_tris = []
 
     for loop in loops:
-        # если задан лимит на размер петли — применяем его
+        if len(loop) < 3:
+            continue
+
+        # 3.1. Фильтр по количеству вершин
         if max_hole_vertices is not None and len(loop) > max_hole_vertices:
             continue
 
         loop_pts = verts[loop]
+
+        # 3.2. Фильтр по площади (если задан)
+        if max_area_ratio is not None:
+            centroid = loop_pts.mean(axis=0)
+            P = loop_pts - centroid
+            # PCA-базис
+            U, S, Vt = np.linalg.svd(P, full_matrices=False)
+            u = Vt[0, :]
+            v = Vt[1, :]
+
+            pts2d = np.stack([P @ u, P @ v], axis=1)
+            x = pts2d[:, 0]
+            y = pts2d[:, 1]
+            area = 0.5 * abs(np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
+
+            if area > (max_extent * max_extent * max_area_ratio):
+                # дырка слишком большая для этого "мелкого" заполнителя
+                continue
+
+        # 4. создаём центр и веер треугольников
         center = loop_pts.mean(axis=0)
         center_index = len(verts) + len(new_vertices)
         new_vertices.append(center)
 
-        # веер треугольников вокруг центра
         for i in range(len(loop)):
             a = loop[i]
             b = loop[(i + 1) % len(loop)]
             new_tris.append([a, b, center_index])
 
     if not new_tris:
+        print("[FillHoles] no small holes passed filters")
         return mesh
 
     verts_out = np.vstack([verts, np.asarray(new_vertices, dtype=np.float64)])
@@ -193,9 +227,9 @@ def fill_small_holes(
     mesh.remove_unreferenced_vertices()
     mesh.compute_vertex_normals()
 
-    print(f"[FillHoles] Filled {len(new_tris)} triangles in {len(loops)} loops.")
+    print(f"[FillHoles] Filled {len(new_tris)} triangles in {len(loops)} loops "
+          f"(new verts: {len(new_vertices)})")
     return mesh
-
 
     """
     Находит все open-boundary петли по рёбрам и зашивает их веером треугольников.
@@ -722,4 +756,45 @@ def smooth_slab_boundaries(
     mesh.compute_triangle_normals()
     print(f"[smooth_slab_boundaries] smoothed {len(boundary_verts)} boundary verts, "
           f"iterations={iterations}")
+    return mesh
+
+def keep_largest_component(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
+    """
+    Оставляет только самый большой по количеству треугольников связный компонент,
+    все мелкие "островки" (оторванные куски) удаляет.
+    """
+    tris = np.asarray(mesh.triangles)
+    if tris.size == 0:
+        print("[KeepLargest] no triangles")
+        return mesh
+
+    # кластеризация по связности треугольников (есть в новых Open3D)
+    triangle_clusters, cluster_n_triangles, cluster_area = mesh.cluster_connected_triangles()
+
+    triangle_clusters = np.asarray(triangle_clusters)
+    cluster_n_triangles = np.asarray(cluster_n_triangles)
+
+    if cluster_n_triangles.size == 0:
+        print("[KeepLargest] no clusters info")
+        return mesh
+
+    largest_cluster = int(cluster_n_triangles.argmax())
+    keep_count = int(cluster_n_triangles[largest_cluster])
+
+    # маска "что удалить": все кластеры кроме самого большого
+    remove_mask = triangle_clusters != largest_cluster
+
+    print(f"[KeepLargest] keeping cluster {largest_cluster} "
+          f"({keep_count} tris), "
+          f"removing {(remove_mask).sum()} tris in other clusters")
+
+    mesh.remove_triangles_by_mask(remove_mask)
+    mesh.remove_unreferenced_vertices()
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_duplicated_vertices()
+    mesh.remove_non_manifold_edges()
+    mesh.compute_vertex_normals()
+    mesh.compute_triangle_normals()
+
     return mesh
