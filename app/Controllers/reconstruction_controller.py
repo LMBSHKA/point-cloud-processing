@@ -14,6 +14,7 @@ from Core.mesh_postprocess import (
     fill_small_holes,
     fill_two_largest_holes_with_grid,
     is_slab_like,
+    smooth_slab_boundaries,
 )
 
 """
@@ -77,6 +78,15 @@ def run_reconstruction(args) -> None:
             thickness_ratio_threshold=0.25,
         )
         
+    # после выпрямления знаем ось толщины — берём её ещё раз из bbox
+    bbox = mesh_norm.get_axis_aligned_bounding_box()
+    thin_axis = int(np.argmin(bbox.get_extent()))
+    mesh_norm = smooth_slab_boundaries(
+        mesh_norm,
+        thin_axis=thin_axis,
+        iterations=3,
+        alpha=0.4,
+    )
 
     # 4.1. Удаляем очень длинные треугольники-лучи
     mesh_norm = remove_long_triangles(mesh_norm, max_edge_ratio=0.3)
@@ -87,8 +97,6 @@ def run_reconstruction(args) -> None:
         grid_step_ratio=0.03,
         min_area_ratio=0.0005,
     )
-
-    #mesh_norm = fill_all_holes(mesh_norm)
     mesh_norm = fill_small_holes(mesh_norm, max_hole_vertices=40)
 
     # 4.3. Финальное мягкое сглаживание поверхности

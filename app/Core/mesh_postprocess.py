@@ -651,3 +651,75 @@ def is_slab_like(mesh: o3d.geometry.TriangleMesh,
     ratio = min_extent / max_extent
     print(f"[SlabCheck] min/max extent = {ratio:.3f}")
     return ratio < thickness_ratio_threshold
+
+def smooth_slab_boundaries(
+    mesh: o3d.geometry.TriangleMesh,
+    thin_axis: int,
+    iterations: int = 3,
+    alpha: float = 0.4,
+) -> o3d.geometry.TriangleMesh:
+    """
+    Мягко разглаживает зубчатые границы у тонкой плиты.
+
+    - находим граничные петли (open-boundary loop);
+    - для вершин этих петель двигаем их к среднему соседей,
+      но координату по оси толщины (thin_axis) фиксируем,
+      чтобы торец оставался строго в плоскости.
+
+    iterations — сколько раз повторить сглаживание;
+    alpha      — насколько сильно тянуть к среднему (0..1).
+    """
+    verts = np.asarray(mesh.vertices)
+    tris = np.asarray(mesh.triangles, dtype=np.int32)
+    if tris.size == 0:
+        return mesh
+
+    # считаем граничные рёбра
+    edges = np.vstack([
+        tris[:, [0, 1]],
+        tris[:, [1, 2]],
+        tris[:, [2, 0]],
+    ])
+    edges_sorted = np.sort(edges, axis=1)
+    uniq_edges, counts = np.unique(edges_sorted, axis=0, return_counts=True)
+    boundary_edges = uniq_edges[counts == 1]
+    if len(boundary_edges) == 0:
+        print("[smooth_slab_boundaries] no boundary edges")
+        return mesh
+
+    # граф смежности только по граничным рёбрам
+    adj = defaultdict(list)
+    boundary_verts = set()
+    for u, v in boundary_edges:
+        u = int(u); v = int(v)
+        adj[u].append(v)
+        adj[v].append(u)
+        boundary_verts.add(u)
+        boundary_verts.add(v)
+
+    boundary_verts = sorted(boundary_verts)
+
+    for it in range(iterations):
+        new_positions = {}
+        for v_idx in boundary_verts:
+            neigh = adj[v_idx]
+            if not neigh:
+                continue
+            p = verts[v_idx]
+            neigh_pts = verts[neigh]
+            mean_neigh = neigh_pts.mean(axis=0)
+            q = (1.0 - alpha) * p + alpha * mean_neigh
+            # фиксируем координату по оси толщины
+            q[thin_axis] = p[thin_axis]
+            new_positions[v_idx] = q
+
+        # применяем
+        for v_idx, q in new_positions.items():
+            verts[v_idx] = q
+
+    mesh.vertices = o3d.utility.Vector3dVector(verts)
+    mesh.compute_vertex_normals()
+    mesh.compute_triangle_normals()
+    print(f"[smooth_slab_boundaries] smoothed {len(boundary_verts)} boundary verts, "
+          f"iterations={iterations}")
+    return mesh
