@@ -457,26 +457,15 @@ def _point_in_polygon(pt: np.ndarray, poly: np.ndarray) -> bool:
                 inside = not inside
     return inside
 
-def fill_holes_planar_with_grid(
+def fill_two_largest_holes_with_grid(
     mesh: o3d.geometry.TriangleMesh,
     grid_step_ratio: float = 0.03,
-    max_loop_vertices: int | None = None,
-    slab_axis: int | None = None,
-    axis_tolerance_deg: float = 20.0,
     min_area_ratio: float = 0.001,
 ) -> o3d.geometry.TriangleMesh:
     """
-    Закрывает почти-планарные дырки "крышкой" в виде регулярной сетки.
-
-    Идея:
-      - считаем, что у нас плита/стена;
-      - выбираем ось толщины (slab_axis), дырки с нормалью вдоль этой оси
-        считаем верхом/низом;
-      - в плоскости дырки строим сетку, привязываем узлы к граничным вершинам,
-        заполняем квадраты двумя треугольниками.
-
-    grid_step_ratio:
-        шаг сетки как доля максимального размера модели (0.02–0.05 обычно норм).
+    Заполняет ДВЕ самые большие дырки (по площади в проекции) регулярной сеткой.
+    Без учёта осей/нормалей — максимально простой вариант
+    специально под "крышки" для стенки.
     """
     verts = np.asarray(mesh.vertices)
     tris_old = np.asarray(mesh.triangles, dtype=np.int32)
@@ -489,64 +478,69 @@ def fill_holes_planar_with_grid(
     if max_extent <= 0:
         return mesh
 
-    # Ось толщины плиты
-    if slab_axis is None:
-        slab_axis = int(np.argmin(extent))
-
-    axis_vec = np.zeros(3, dtype=np.float64)
-    axis_vec[slab_axis] = 1.0
-
     loops = _find_boundary_loops(mesh)
+    print(f"[fill_holes_grid_simple] boundary loops: {len(loops)}")
     if not loops:
-        print("[fill_holes_grid] no open boundaries")
+        print("[fill_holes_grid_simple] no open boundaries")
         return mesh
 
-    cos_thresh = np.cos(np.deg2rad(axis_tolerance_deg))
-    new_vertices = []
-    new_tris = []
-
-    # сколько уже вершин есть
-    base_vert_idx = len(verts)
-
+    candidates = []
+    # --------- собираем все петли с их площадью ---------
     for loop in loops:
         if len(loop) < 3:
-            continue
-        if max_loop_vertices is not None and len(loop) > max_loop_vertices:
             continue
 
         loop_idx = np.array(loop, dtype=int)
         loop_pts = verts[loop_idx]
 
-        # PCA-плоскость
+        # Плоскость по PCA
         centroid = loop_pts.mean(axis=0)
         P = loop_pts - centroid
         U, S, Vt = np.linalg.svd(P, full_matrices=False)
-        normal = Vt[2, :]
-        normal = normal / (np.linalg.norm(normal) + 1e-12)
 
-        # если slab_axis не задан, не фильтруем по нормали вообще
-        if slab_axis is not None:
-            cosang = abs(float(np.dot(normal, axis_vec)))
-            if cosang < cos_thresh:
-                # петля явно не попадает в "верх/низ" – пропускаем
-                continue
-
-
-        # базис в плоскости
         u = Vt[0, :]
         v = Vt[1, :]
 
-        # координаты вершин петли в 2D (относительно центра)
         pts2d = np.stack([P @ u, P @ v], axis=1)
 
-        # площадь петли — фильтр для совсем мелкого мусора
         x = pts2d[:, 0]
         y = pts2d[:, 1]
         area = 0.5 * abs(np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
+
         if area < (max_extent * max_extent * min_area_ratio):
             continue
 
-        # 2D bbox полигона
+        candidates.append(
+            dict(
+                loop_idx=loop_idx,
+                centroid=centroid,
+                Vt=Vt,
+                pts2d=pts2d,
+                area=area,
+            )
+        )
+
+    print(f"[fill_holes_grid_simple] candidates by area: {len(candidates)}")
+    if not candidates:
+        print("[fill_holes_grid_simple] no candidates by area")
+        return mesh
+
+    # Берём две самые большие дырки
+    candidates.sort(key=lambda c: c["area"], reverse=True)
+    candidates = candidates[:2]
+
+    new_vertices = []
+    new_tris = []
+
+    for cand in candidates:
+        loop_idx = cand["loop_idx"]
+        centroid = cand["centroid"]
+        Vt = cand["Vt"]
+        pts2d = cand["pts2d"]
+
+        u = Vt[0, :]
+        v = Vt[1, :]
+
         poly_min = pts2d.min(axis=0)
         poly_max = pts2d.max(axis=0)
         poly_extent = poly_max - poly_min
@@ -583,25 +577,22 @@ def fill_holes_planar_with_grid(
                 p2 = np.array([xs[ix], ys[iy]], dtype=np.float64)
                 if not _point_in_polygon(p2, pts2d):
                     continue
-
-                # создаём новую 3D-вершину
+                # ГЛАВНОЕ ИСПРАВЛЕНИЕ: индекс = старые вершины + кол-во новых
+                new_index = len(verts) + len(new_vertices)
                 p3 = centroid + u * p2[0] + v * p2[1]
-                new_index = base_vert_idx + len(new_vertices)
                 new_vertices.append(p3)
                 node_idx[ix, iy] = new_index
 
-        # 3) Строим треугольники по "квадратикам" сетки
+        # 3) Квадраты -> два треугольника
         for ix in range(nx):
             for iy in range(ny):
                 a = node_idx[ix, iy]
                 b = node_idx[ix + 1, iy]
                 c = node_idx[ix + 1, iy + 1]
                 d = node_idx[ix, iy + 1]
-
                 if a == -1 or b == -1 or c == -1 or d == -1:
                     continue
 
-                # проверяем, что центр квадрата внутри полигона
                 cx = 0.5 * (xs[ix] + xs[ix + 1])
                 cy = 0.5 * (ys[iy] + ys[iy + 1])
                 if not _point_in_polygon(np.array([cx, cy]), pts2d):
@@ -610,11 +601,8 @@ def fill_holes_planar_with_grid(
                 new_tris.append([a, b, c])
                 new_tris.append([a, c, d])
 
-        # Обновляем базовый индекс для следующих петель
-        base_vert_idx = base_vert_idx + len(new_vertices)
-
     if not new_tris:
-        print("[fill_holes_grid] no triangles generated")
+        print("[fill_holes_grid_simple] no triangles generated")
         return mesh
 
     # добавляем новые вершины
@@ -635,7 +623,31 @@ def fill_holes_planar_with_grid(
     mesh.compute_vertex_normals()
     mesh.compute_triangle_normals()
 
-    print(f"[fill_holes_grid] added {len(new_tris)} triangles, "
-          f"new verts: {len(new_vertices)}")
-    
+    print(
+        f"[fill_holes_grid_simple] caps built: {len(candidates)}, "
+        f"added {len(new_tris)} triangles, new verts: {len(new_vertices)}"
+    )
     return mesh
+
+
+def is_slab_like(mesh: o3d.geometry.TriangleMesh,
+                 thickness_ratio_threshold: float = 0.3) -> bool:
+    """
+    Возвращает True, если объект похож на "плиту/стену":
+    одна размерность (толщина) заметно меньше двух других.
+
+    thickness_ratio_threshold:
+        min_extent / max_extent должен быть МЕНЬШЕ этого порога.
+        Например:
+           - стена:   0.05..0.2  -> True
+           - бассейн: 0.4..0.8   -> False
+    """
+    bbox = mesh.get_axis_aligned_bounding_box()
+    extent = bbox.get_extent()
+    min_extent = float(np.min(extent))
+    max_extent = float(np.max(extent))
+    if max_extent <= 0:
+        return False
+    ratio = min_extent / max_extent
+    print(f"[SlabCheck] min/max extent = {ratio:.3f}")
+    return ratio < thickness_ratio_threshold
