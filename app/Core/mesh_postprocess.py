@@ -371,3 +371,271 @@ def remove_long_triangles(
     mesh.compute_triangle_normals()
 
     return mesh
+
+def _find_boundary_loops(mesh: o3d.geometry.TriangleMesh):
+    """Возвращает список граничных петель (список списков индексов вершин)."""
+    tris = np.asarray(mesh.triangles)
+    if tris.size == 0:
+        return []
+
+    edges = np.vstack([
+        tris[:, [0, 1]],
+        tris[:, [1, 2]],
+        tris[:, [2, 0]],
+    ])
+    edges_sorted = np.sort(edges, axis=1)
+    uniq_edges, counts = np.unique(edges_sorted, axis=0, return_counts=True)
+    boundary_edges = uniq_edges[counts == 1]
+
+    if len(boundary_edges) == 0:
+        return []
+
+    adj = defaultdict(list)
+    for u, v in boundary_edges:
+        u = int(u); v = int(v)
+        adj[u].append(v)
+        adj[v].append(u)
+
+    def edge_key(a, b):
+        return (min(a, b), max(a, b))
+
+    visited_edges = set()
+    loops = []
+
+    for u, v in boundary_edges:
+        u = int(u); v = int(v)
+        e0 = edge_key(u, v)
+        if e0 in visited_edges:
+            continue
+
+        start = u
+        loop = [start]
+        cur = start
+        prev = None
+
+        while True:
+            next_vertex = None
+            for nb in adj[cur]:
+                e = edge_key(cur, nb)
+                if e not in visited_edges:
+                    next_vertex = nb
+                    break
+
+            if next_vertex is None:
+                break
+
+            visited_edges.add(edge_key(cur, next_vertex))
+            cur = next_vertex
+
+            if cur == start:
+                break
+            else:
+                loop.append(cur)
+
+        if len(loop) >= 3:
+            loops.append(loop)
+
+    return loops
+
+
+def _point_in_polygon(pt: np.ndarray, poly: np.ndarray) -> bool:
+    """
+    Тест "точка в полигоне" (ray casting) для 2D.
+    pt: (2,), poly: (N,2) в порядке обхода.
+    """
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        # пересечение с горизонтальным лучом вправо
+        if (y1 > y) != (y2 > y):
+            t = (y - y1) / ((y2 - y1) + 1e-12)
+            x_int = x1 + t * (x2 - x1)
+            if x_int >= x:
+                inside = not inside
+    return inside
+
+def fill_holes_planar_with_grid(
+    mesh: o3d.geometry.TriangleMesh,
+    grid_step_ratio: float = 0.03,
+    max_loop_vertices: int | None = None,
+    slab_axis: int | None = None,
+    axis_tolerance_deg: float = 20.0,
+    min_area_ratio: float = 0.001,
+) -> o3d.geometry.TriangleMesh:
+    """
+    Закрывает почти-планарные дырки "крышкой" в виде регулярной сетки.
+
+    Идея:
+      - считаем, что у нас плита/стена;
+      - выбираем ось толщины (slab_axis), дырки с нормалью вдоль этой оси
+        считаем верхом/низом;
+      - в плоскости дырки строим сетку, привязываем узлы к граничным вершинам,
+        заполняем квадраты двумя треугольниками.
+
+    grid_step_ratio:
+        шаг сетки как доля максимального размера модели (0.02–0.05 обычно норм).
+    """
+    verts = np.asarray(mesh.vertices)
+    tris_old = np.asarray(mesh.triangles, dtype=np.int32)
+    if tris_old.size == 0:
+        return mesh
+
+    bbox = mesh.get_axis_aligned_bounding_box()
+    extent = bbox.get_extent()
+    max_extent = float(np.max(extent))
+    if max_extent <= 0:
+        return mesh
+
+    # Ось толщины плиты
+    if slab_axis is None:
+        slab_axis = int(np.argmin(extent))
+
+    axis_vec = np.zeros(3, dtype=np.float64)
+    axis_vec[slab_axis] = 1.0
+
+    loops = _find_boundary_loops(mesh)
+    if not loops:
+        print("[fill_holes_grid] no open boundaries")
+        return mesh
+
+    cos_thresh = np.cos(np.deg2rad(axis_tolerance_deg))
+    new_vertices = []
+    new_tris = []
+
+    # сколько уже вершин есть
+    base_vert_idx = len(verts)
+
+    for loop in loops:
+        if len(loop) < 3:
+            continue
+        if max_loop_vertices is not None and len(loop) > max_loop_vertices:
+            continue
+
+        loop_idx = np.array(loop, dtype=int)
+        loop_pts = verts[loop_idx]
+
+        # PCA-плоскость
+        centroid = loop_pts.mean(axis=0)
+        P = loop_pts - centroid
+        U, S, Vt = np.linalg.svd(P, full_matrices=False)
+        normal = Vt[2, :]
+        normal = normal / (np.linalg.norm(normal) + 1e-12)
+
+        # если slab_axis не задан, не фильтруем по нормали вообще
+        if slab_axis is not None:
+            cosang = abs(float(np.dot(normal, axis_vec)))
+            if cosang < cos_thresh:
+                # петля явно не попадает в "верх/низ" – пропускаем
+                continue
+
+
+        # базис в плоскости
+        u = Vt[0, :]
+        v = Vt[1, :]
+
+        # координаты вершин петли в 2D (относительно центра)
+        pts2d = np.stack([P @ u, P @ v], axis=1)
+
+        # площадь петли — фильтр для совсем мелкого мусора
+        x = pts2d[:, 0]
+        y = pts2d[:, 1]
+        area = 0.5 * abs(np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
+        if area < (max_extent * max_extent * min_area_ratio):
+            continue
+
+        # 2D bbox полигона
+        poly_min = pts2d.min(axis=0)
+        poly_max = pts2d.max(axis=0)
+        poly_extent = poly_max - poly_min
+        poly_max_side = float(np.max(poly_extent))
+        if poly_max_side <= 0:
+            continue
+
+        # шаг сетки
+        h = poly_max_side * grid_step_ratio
+        if h <= 1e-6:
+            h = poly_max_side * 0.02
+
+        nx = int(np.ceil(poly_extent[0] / h)) + 1
+        ny = int(np.ceil(poly_extent[1] / h)) + 1
+
+        xs = poly_min[0] + np.arange(nx + 1) * h
+        ys = poly_min[1] + np.arange(ny + 1) * h
+
+        node_idx = -np.ones((nx + 1, ny + 1), dtype=int)
+
+        # 1) Привязываем граничные вершины к ближайшим узлам сетки
+        for k, p in enumerate(pts2d):
+            gx = int(round((p[0] - poly_min[0]) / h))
+            gy = int(round((p[1] - poly_min[1]) / h))
+            gx = max(0, min(nx, gx))
+            gy = max(0, min(ny, gy))
+            node_idx[gx, gy] = loop_idx[k]
+
+        # 2) Добавляем новые внутренние вершины сетки
+        for ix in range(nx + 1):
+            for iy in range(ny + 1):
+                if node_idx[ix, iy] != -1:
+                    continue
+                p2 = np.array([xs[ix], ys[iy]], dtype=np.float64)
+                if not _point_in_polygon(p2, pts2d):
+                    continue
+
+                # создаём новую 3D-вершину
+                p3 = centroid + u * p2[0] + v * p2[1]
+                new_index = base_vert_idx + len(new_vertices)
+                new_vertices.append(p3)
+                node_idx[ix, iy] = new_index
+
+        # 3) Строим треугольники по "квадратикам" сетки
+        for ix in range(nx):
+            for iy in range(ny):
+                a = node_idx[ix, iy]
+                b = node_idx[ix + 1, iy]
+                c = node_idx[ix + 1, iy + 1]
+                d = node_idx[ix, iy + 1]
+
+                if a == -1 or b == -1 or c == -1 or d == -1:
+                    continue
+
+                # проверяем, что центр квадрата внутри полигона
+                cx = 0.5 * (xs[ix] + xs[ix + 1])
+                cy = 0.5 * (ys[iy] + ys[iy + 1])
+                if not _point_in_polygon(np.array([cx, cy]), pts2d):
+                    continue
+
+                new_tris.append([a, b, c])
+                new_tris.append([a, c, d])
+
+        # Обновляем базовый индекс для следующих петель
+        base_vert_idx = base_vert_idx + len(new_vertices)
+
+    if not new_tris:
+        print("[fill_holes_grid] no triangles generated")
+        return mesh
+
+    # добавляем новые вершины
+    if new_vertices:
+        verts_out = np.vstack([verts, np.asarray(new_vertices, dtype=np.float64)])
+    else:
+        verts_out = verts
+
+    tris_new = np.vstack([tris_old, np.asarray(new_tris, dtype=np.int32)])
+
+    mesh.vertices = o3d.utility.Vector3dVector(verts_out)
+    mesh.triangles = o3d.utility.Vector3iVector(tris_new)
+
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_unreferenced_vertices()
+    mesh.remove_non_manifold_edges()
+    mesh.compute_vertex_normals()
+    mesh.compute_triangle_normals()
+
+    print(f"[fill_holes_grid] added {len(new_tris)} triangles, "
+          f"new verts: {len(new_vertices)}")
+    
+    return mesh

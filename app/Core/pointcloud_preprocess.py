@@ -128,7 +128,6 @@ def smooth_mesh_soft(
 
     mesh = mesh.filter_smooth_taubin(
         number_of_iterations=iterations
-        # можно добавить lambda_filter, mu, если захочешь ещё тонкую настройку
     )
     mesh.remove_degenerate_triangles()
     mesh.remove_duplicated_triangles()

@@ -11,7 +11,8 @@ from Core.mesh_postprocess import (
     straighten_slab_sides,
     remove_long_triangles,
     fill_all_holes,
-    fill_small_holes
+    fill_small_holes,
+    fill_holes_planar_with_grid
 )
 
 """
@@ -80,9 +81,21 @@ def run_reconstruction(args) -> None:
     mesh_norm = remove_long_triangles(mesh_norm, max_edge_ratio=0.3)
 
     # 4.2. Зашиваем все появившиеся дыры
-    mesh_norm = fill_all_holes(mesh_norm)
-    #mesh_norm = fill_small_holes(mesh_norm, max_hole_vertices=40)
+    bbox = mesh_norm.get_axis_aligned_bounding_box()
+    thin_axis = int(np.argmin(bbox.get_extent()))  # ось толщины плиты
 
+    mesh_norm = fill_holes_planar_with_grid(
+        mesh_norm,
+        grid_step_ratio=0.03,
+        max_loop_vertices=None,
+        slab_axis=None,          # << ВАЖНО: было thin_axis
+        axis_tolerance_deg=180,  # максимально разрешаемый угол
+        min_area_ratio=0.0001,   # ослабим фильтр по площади
+    )
+
+    mesh_norm = fill_all_holes(mesh_norm)
+    mesh_norm = fill_small_holes(mesh_norm, max_hole_vertices=40)
+    
     # 4.3. Финальное мягкое сглаживание поверхности
     mesh_norm = smooth_mesh_soft(mesh_norm, iterations=5)
 
