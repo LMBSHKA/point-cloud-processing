@@ -17,9 +17,7 @@ from Core.mesh_postprocess import (
     smooth_slab_boundaries,
 )
 
-"""
-    Вся логика запуска
-"""
+
 def run_reconstruction(args) -> None:
     in_path = Path(args.input)
     if not in_path.is_file():
@@ -34,10 +32,9 @@ def run_reconstruction(args) -> None:
     print(f"[Main] Output: {out_path}")
     print(f"[Main] Method: {args.method}")
 
-    # 1. Загружаем и режем по количеству точек
+    # 1. Загрузка
     pcd = load_point_cloud_any(in_path, max_points=args.max_points)
 
-    # Step 1: исходное облако
     if args.show_steps:
         show_geometry(pcd, "Step 1 - Raw point cloud")
     if args.save_steps:
@@ -51,7 +48,7 @@ def run_reconstruction(args) -> None:
     if args.save_steps:
         save_step_geometry(pcd_norm, out_path, "step2_normalized")
 
-    # 3. Предобработка (даунсэмплинг + нормали)
+    # 3. Предобработка (voxel + нормали)
     pcd_proc = preprocess_point_cloud(pcd_norm, voxel_size=args.voxel_size)
 
     if args.show_steps:
@@ -66,40 +63,45 @@ def run_reconstruction(args) -> None:
             depth=args.depth,
             keep_ratio=args.keep_ratio,
         )
-    else:
+
+    else:  # BPA
         mesh_norm = reconstruct_bpa(pcd_proc)
         mesh_norm = mesh_norm.filter_smooth_taubin(number_of_iterations=1)
         mesh_norm.remove_degenerate_triangles()
         mesh_norm.compute_vertex_normals()
-        
+
+        # выпрямляем торцы плиты
         mesh_norm = straighten_slab_sides(
             mesh_norm,
             snap_ratio=0.25,
             thickness_ratio_threshold=0.25,
         )
-        
-    # после выпрямления знаем ось толщины — берём её ещё раз из bbox
-    bbox = mesh_norm.get_axis_aligned_bounding_box()
-    thin_axis = int(np.argmin(bbox.get_extent()))
-    mesh_norm = smooth_slab_boundaries(
-        mesh_norm,
-        thin_axis=thin_axis,
-        iterations=3,
-        alpha=0.4,
-    )
 
-    # 4.1. Удаляем очень длинные треугольники-лучи
+        # если действительно похоже на плиту — сгладим границы и поставим крышки
+        if is_slab_like(mesh_norm, thickness_ratio_threshold=0.6):
+            bbox = mesh_norm.get_axis_aligned_bounding_box()
+            thin_axis = int(np.argmin(bbox.get_extent()))
+
+            mesh_norm = smooth_slab_boundaries(
+                mesh_norm,
+                thin_axis=thin_axis,
+                iterations=3,
+                alpha=0.4,
+            )
+
+            mesh_norm = fill_two_largest_holes_with_grid(
+                mesh_norm,
+                grid_step_ratio=0.03,
+                min_area_ratio=0.0005,
+            )
+
+    # 4.1. Удаляем длинные лучи (для обоих методов)
     mesh_norm = remove_long_triangles(mesh_norm, max_edge_ratio=0.3)
 
-    # 4.2. Пробуем закрыть две самые большие дыры сеткой
-    mesh_norm = fill_two_largest_holes_with_grid(
-        mesh_norm,
-        grid_step_ratio=0.03,
-        min_area_ratio=0.0005,
-    )
+    # 4.2. Зашиваем мелкие дырки веером (краевые щёлки, артефакты)
     mesh_norm = fill_small_holes(mesh_norm, max_hole_vertices=40)
 
-    # 4.3. Финальное мягкое сглаживание поверхности
+    # 4.3. Финальное мягкое сглаживание
     mesh_norm = smooth_mesh_soft(mesh_norm, iterations=5)
 
     if args.show_steps:
@@ -107,7 +109,7 @@ def run_reconstruction(args) -> None:
     if args.save_steps:
         save_step_geometry(mesh_norm, out_path, "step4_mesh_norm")
 
-    # 5. Возвращаем масштаб и позицию в исходные координаты
+    # 5. Возвращаем масштаб и позицию
     print("[Rescale] Restoring original scale and position...")
     if scale > 0:
         mesh_norm.scale(scale, center=(0.0, 0.0, 0.0))
@@ -118,10 +120,10 @@ def run_reconstruction(args) -> None:
     R = mesh.get_rotation_matrix_from_xyz((np.pi / 2, 0.0, 0.0))
     mesh.rotate(R, center=(0.0, 0.0, 0.0))
 
-    # 6. Сохраняем итоговый меш
+    # 6. Сохраняем
     print(f"[IO] Writing mesh to {out_path} ...")
     o3d.io.write_triangle_mesh(str(out_path), mesh, write_ascii=False)
     print("[Done] Finished.")
 
-    # 7. Финальная визуализация
+    # 7. Визуализация
     show_geometry(mesh, "FINAL RESULT")
