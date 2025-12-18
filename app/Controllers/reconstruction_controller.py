@@ -2,12 +2,12 @@ from pathlib import Path
 import numpy as np
 import open3d as o3d
 
-from Infrastructure.pointcloud_io import load_point_cloud_any
-from Infrastructure.output import save_step_geometry
-from UI.visualization import show_geometry
-from Core.pointcloud_preprocess import normalize_point_cloud, preprocess_point_cloud, smooth_mesh_soft
-from Core.mesh_reconstruction import reconstruct_poisson, reconstruct_bpa
-from Core.mesh_postprocess import (
+from app.Infrastructure.pointcloud_io import load_point_cloud_any
+from app.Infrastructure.output import save_step_geometry
+from app.UI.visualization import show_geometry
+from app.Core.pointcloud_preprocess import normalize_point_cloud, preprocess_point_cloud, smooth_mesh_soft
+from app.Core.mesh_reconstruction import reconstruct_poisson, reconstruct_bpa
+from app.Core.mesh_postprocess import (
     straighten_slab_sides,
     remove_long_triangles,
     fill_all_holes,
@@ -19,7 +19,7 @@ from Core.mesh_postprocess import (
 )
 
 
-def run_reconstruction(args) -> None:
+def run_reconstruction(args, *, return_mesh: bool = False) -> None:
     in_path = Path(args.input)
     if not in_path.is_file():
         raise SystemExit(f"Файл не найден: {in_path}")
@@ -135,4 +135,10 @@ def run_reconstruction(args) -> None:
     print("[Done] Finished.")
 
     # 7. Визуализация
-    show_geometry(mesh, "FINAL RESULT")
+    o3d.io.write_triangle_mesh(str(out_path), mesh, write_ascii=False)
+
+    if getattr(args, "show_final", True):
+        show_geometry(mesh, "FINAL RESULT")
+
+    if return_mesh:
+        return mesh, out_path

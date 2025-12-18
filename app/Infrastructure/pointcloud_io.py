@@ -162,6 +162,7 @@ def load_e57(path: Path, max_points: Optional[int] = None) -> o3d.geometry.Point
 Поддерживаемые форматы:
     - .laz  — через `load_laz`
     - .e57  — через `load_e57`
+    ".ply", ".pcd"
 
 Параметры:
     path (Path):
@@ -175,9 +176,38 @@ def load_e57(path: Path, max_points: Optional[int] = None) -> o3d.geometry.Point
 """
 def load_point_cloud_any(path: Path, max_points: Optional[int] = None) -> o3d.geometry.PointCloud:
     ext = path.suffix.lower()
-    if ext == ".laz":
+
+    if ext in [".las", ".laz"]:
         return load_laz(path, max_points=max_points)
-    elif ext == ".e57":
+
+    if ext == ".e57":
         return load_e57(path, max_points=max_points)
-    else:
-        raise ValueError(f"Неподдерживаемое расширение файла: {ext} (нужно .laz или .e57)")
+
+    if ext in [".ply", ".pcd"]:
+        print(f"[O3D] Reading {path} ...")
+        pcd = o3d.io.read_point_cloud(str(path))
+        if pcd is None or len(pcd.points) == 0:
+            raise ValueError(f"Не удалось прочитать облако точек из файла: {path}")
+
+        # если нужно ограничить max_points — случайно выберем подмножество
+        if max_points is not None and len(pcd.points) > max_points:
+            pts = np.asarray(pcd.points)
+            idx = np.random.choice(pts.shape[0], max_points, replace=False)
+            pcd2 = o3d.geometry.PointCloud()
+            pcd2.points = o3d.utility.Vector3dVector(pts[idx])
+
+            if pcd.has_colors():
+                cols = np.asarray(pcd.colors)
+                pcd2.colors = o3d.utility.Vector3dVector(cols[idx])
+
+            if pcd.has_normals():
+                nrm = np.asarray(pcd.normals)
+                pcd2.normals = o3d.utility.Vector3dVector(nrm[idx])
+
+            pcd = pcd2
+            print(f"[O3D] Downsampled to {max_points} points")
+
+        return pcd
+
+    raise ValueError(f"Неподдерживаемое расширение файла: {ext} (нужно .las/.laz/.e57/.ply/.pcd)")
+
