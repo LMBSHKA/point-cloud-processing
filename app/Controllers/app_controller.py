@@ -50,6 +50,7 @@ class AppController:
         window.tree.item_selected.connect(self.on_tree_selected)
         window.tree.visibility_changed.connect(self.on_visibility_changed)
         window.act_build_mesh.triggered.connect(self.reconstruct)
+        window.act_filter.triggered.connect(self.apply_filter)
 
 
     def import_cloud(self) -> None:
@@ -159,4 +160,55 @@ class AppController:
         except Exception as e:
             self.window.set_status("Ошибка реконструкции", progress=0)
             QMessageBox.critical(self.window, "Ошибка реконструкции", str(e))
+    
+    def apply_filter(self) -> None:
+        if not self._current_cloud_id:
+            QMessageBox.information(self.window, "Нет данных", "Сначала импортируйте облако точек.")
+            return
+
+        try:
+            import numpy as np
+            from app.Infrastructure.filtering_adapter import filter_pcd
+
+            self.window.set_status("Фильтрация…", progress=20)
+
+            pcd = self._cloud_o3d_by_id[self._current_cloud_id]
+
+            # параметры как в твоём filtering.py
+            pcd2 = filter_pcd(
+                pcd,
+                nb_stat=28,
+                nb_radial=12,
+                std=0.5,
+                rad=0.08,
+                vox_size=0.05,
+            )
+
+            self._cloud_o3d_by_id[self._current_cloud_id] = pcd2
+
+            pts = np.asarray(pcd2.points)
+            if pts.shape[0] == 0:
+                raise RuntimeError("Пустое облако после фильтрации")
+
+            # превью для Viewer
+            max_preview = 2_000_000
+            if pts.shape[0] > max_preview:
+                idx = np.random.choice(pts.shape[0], size=max_preview, replace=False)
+                pts_preview = pts[idx]
+            else:
+                pts_preview = pts
+
+            pts_preview = pts_preview - pts_preview.mean(axis=0)
+            pts_preview = pts_preview.astype(np.float32, copy=False)
+            self._cloud_preview_by_id[self._current_cloud_id] = pts_preview
+
+            # обновить показ
+            self.window.viewer.show_point_cloud(self._current_cloud_id, pts_preview)
+
+            self.window.set_status(f"Фильтрация завершена (точек: {len(pcd2.points):,})", progress=100)
+
+        except Exception as e:
+            self.window.set_status("Ошибка фильтрации", progress=0)
+            QMessageBox.critical(self.window, "Ошибка фильтрации", str(e))
+
 
