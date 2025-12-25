@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QWidget
 class Viewer3D(QWidget):
     """
     Обёртка над PyVista (QtInteractor).
-    Умеет показывать облака точек и управлять их видимостью.
+    Умеет показывать облака точек, меши и управлять видимостью.
     """
 
     def __init__(self, parent=None) -> None:
@@ -29,25 +29,45 @@ class Viewer3D(QWidget):
     def _init_scene(self) -> None:
         self._plotter.set_background("#0B0F1E")
 
-        # Оси в углу экрана (как в CAD)
         self._plotter.add_axes(
             interactive=False,
             line_width=2,
             color="white"
         )
 
-        # Ортографическая камера (ключевой момент)
         self._plotter.enable_parallel_projection()
-        self._plotter.reset_camera()
+        # Без позиционных аргументов:
+        self._plotter.reset_camera(render=False)
+        self._plotter.render()
 
     def clear(self) -> None:
         self._plotter.clear()
         self._actors.clear()
         self._init_scene()
 
+    def _reset_camera_to_bounds(self, bounds, zoom: float = 1.2) -> None:
+        """
+        Единая безопасная функция сброса камеры без deprecated-позиционных аргументов.
+        """
+        # bounds может быть None/битым — на всякий
+        if bounds is None:
+            self._plotter.reset_camera(render=True)
+            return
+
+        # Передаём bounds именованно + render именованно (это убирает warning)
+        self._plotter.reset_camera(bounds=bounds, render=True)
+
+        if zoom and zoom != 1.0:
+            try:
+                self._plotter.camera.zoom(float(zoom))
+            except Exception:
+                pass
+
+        self._plotter.render()
+
     def show_point_cloud(self, obj_id: str, points: np.ndarray) -> None:
         """
-        Отображает облако точек в центре сцены.
+        Отображает облако точек.
         """
         # Удаляем старый актор, если был
         if obj_id in self._actors:
@@ -57,7 +77,8 @@ class Viewer3D(QWidget):
                 pass
             self._actors.pop(obj_id, None)
 
-        cloud = pv.PolyData(points)
+        pts = np.asarray(points, dtype=np.float32)
+        cloud = pv.PolyData(pts)
 
         actor = self._plotter.add_points(
             cloud,
@@ -65,32 +86,24 @@ class Viewer3D(QWidget):
             render_points_as_spheres=False,
             color="white"
         )
-
         self._actors[obj_id] = actor
 
-        # Фокусируем камеру по границам облака
-        bounds = cloud.bounds
-        self._plotter.reset_camera(bounds)
-        self._plotter.camera.zoom(1.2)
+        self._reset_camera_to_bounds(cloud.bounds, zoom=1.2)
 
-    def set_visible(self, obj_id: str, visible: bool) -> None:
-        actor = self._actors.get(obj_id)
-        if actor is None:
-            return
-        try:
-            actor.SetVisibility(1 if visible else 0)
-            self._plotter.render()
-        except Exception:
-            pass
-    
     def show_mesh(self, obj_id: str, vertices, triangles) -> None:
-        V = np.asarray(vertices)
-        F = np.asarray(triangles)
+        """
+        Отображает треугольный меш.
+        """
+        V = np.asarray(vertices, dtype=np.float32)
+        F = np.asarray(triangles, dtype=np.int64)
 
-        faces = np.hstack([np.full((F.shape[0], 1), 3), F]).astype(np.int64).ravel()
+        if V.size == 0 or F.size == 0:
+            return
+
+        faces = np.hstack([np.full((F.shape[0], 1), 3, dtype=np.int64), F]).ravel()
         mesh = pv.PolyData(V, faces)
 
-        # Удаляем старый актор, если он уже был
+        # Удаляем старый актор
         if obj_id in self._actors:
             try:
                 self._plotter.remove_actor(self._actors[obj_id])
@@ -101,8 +114,14 @@ class Viewer3D(QWidget):
         actor = self._plotter.add_mesh(mesh, smooth_shading=True)
         self._actors[obj_id] = actor
 
-        # Фокус камеры по модели
-        #self._plotter.reset_camera(mesh.bounds)
-        self._plotter.reset_camera(render=True)
-        self._plotter.render()
+        self._reset_camera_to_bounds(mesh.bounds, zoom=1.2)
 
+    def set_visible(self, obj_id: str, visible: bool) -> None:
+        actor = self._actors.get(obj_id)
+        if actor is None:
+            return
+        try:
+            actor.SetVisibility(1 if visible else 0)
+            self._plotter.render()
+        except Exception:
+            pass
