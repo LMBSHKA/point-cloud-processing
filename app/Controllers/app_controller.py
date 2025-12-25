@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
+import numpy as np
 import open3d as o3d
 from pathlib import Path
 from typing import Callable, Optional
@@ -46,11 +47,69 @@ class AppController:
         """
         self.window = window
 
+        window.act_import_model.triggered.connect(self.import_model)
         window.act_import_cloud.triggered.connect(self.import_cloud)
         window.tree.item_selected.connect(self.on_tree_selected)
         window.tree.visibility_changed.connect(self.on_visibility_changed)
         window.act_build_mesh.triggered.connect(self.reconstruct)
         window.act_filter.triggered.connect(self.apply_filter)
+
+    def import_model(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self.window,
+            "Импорт модели",
+            "",
+            "3D files (*.pcd *.ply *.stl *.obj *.off *.glb *.gltf);;All files (*.*)"
+        )
+        if not path_str:
+            return
+
+        path = Path(path_str)
+        ext = path.suffix.lower()
+        name = path.name
+        obj_id = f"model:{name}"
+
+        try:
+            # 1) PCD — это point cloud
+            if ext == ".pcd":
+                pcd = self.load_point_cloud_any(path, max_points=None)
+                pts = np.asarray(pcd.points, dtype=np.float32)
+                if pts.size == 0:
+                    raise RuntimeError("Пустое облако после загрузки")
+
+                self._cloud_o3d_by_id[obj_id] = pcd
+                self._cloud_preview_by_id[obj_id] = pts
+                self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="cloud", path=str(path)))
+                self.window.viewer.show_point_cloud(obj_id, pts)
+                return
+
+            # 2) Сначала пробуем mesh (особенно важно для PLY)
+            mesh = o3d.io.read_triangle_mesh(str(path))
+            if mesh is not None and len(mesh.vertices) > 0 and len(mesh.triangles) > 0:
+                self._mesh_by_id[obj_id] = mesh
+
+                V = np.asarray(mesh.vertices, dtype=np.float32)
+                F = np.asarray(mesh.triangles, dtype=np.int32)
+
+                self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="mesh", path=str(path)))
+                self.window.viewer.show_mesh(obj_id, V, F)
+                return
+
+            # 3) Если не mesh — читаем как облако точек
+            pcd = o3d.io.read_point_cloud(str(path))
+            if pcd is None or len(pcd.points) == 0:
+                raise RuntimeError("Файл не похож ни на mesh, ни на point cloud")
+
+            pts = np.asarray(pcd.points, dtype=np.float32)
+            self._cloud_o3d_by_id[obj_id] = pcd
+            self._cloud_preview_by_id[obj_id] = pts
+
+            self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="cloud", path=str(path)))
+            self.window.viewer.show_point_cloud(obj_id, pts)
+
+        except Exception as e:
+            QMessageBox.critical(self.window, "Ошибка импорта модели", str(e))
+
 
 
     def import_cloud(self) -> None:
@@ -107,6 +166,16 @@ class AppController:
         pts = self._cloud_preview_by_id.get(obj_id)
         if pts is not None:
             self.window.viewer.show_point_cloud(obj_id, pts)
+            return
+
+        mesh = self._mesh_by_id.get(obj_id)
+        if mesh is not None:
+            import numpy as np
+            V = np.asarray(mesh.vertices)
+            F = np.asarray(mesh.triangles)
+            if V.size and F.size:
+                self.window.viewer.show_mesh(obj_id, V, F)
+            return
 
 
     def on_visibility_changed(self, obj_id: str, visible: bool) -> None:
@@ -210,5 +279,3 @@ class AppController:
         except Exception as e:
             self.window.set_status("Ошибка фильтрации", progress=0)
             QMessageBox.critical(self.window, "Ошибка фильтрации", str(e))
-
-

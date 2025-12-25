@@ -90,9 +90,19 @@ class Viewer3D(QWidget):
         faces = np.hstack([np.full((F.shape[0], 1), 3), F]).astype(np.int64).ravel()
         mesh = pv.PolyData(V, faces)
 
-        # можно чистить сцену или добавлять отдельным актором — пока проще чистить
-        self._plotter.clear()
-        self._plotter.add_mesh(mesh, smooth_shading=True)
-        self._plotter.reset_camera()
+        # Удаляем старый актор, если он уже был
+        if obj_id in self._actors:
+            try:
+                self._plotter.remove_actor(self._actors[obj_id])
+            except Exception:
+                pass
+            self._actors.pop(obj_id, None)
+
+        actor = self._plotter.add_mesh(mesh, smooth_shading=True)
+        self._actors[obj_id] = actor
+
+        # Фокус камеры по модели
+        #self._plotter.reset_camera(mesh.bounds)
+        self._plotter.reset_camera(render=True)
         self._plotter.render()
 
