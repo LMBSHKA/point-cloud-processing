@@ -10,6 +10,8 @@ from typing import Callable, Optional
 from types import SimpleNamespace
 from app.Controllers.reconstruction_controller import run_reconstruction
 
+from app.UI.widgets.instructions import SecondaryWindow
+
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app.UI.widgets.scene_tree import SceneItem
@@ -53,6 +55,12 @@ class AppController:
         window.tree.visibility_changed.connect(self.on_visibility_changed)
         window.act_build_mesh.triggered.connect(self.reconstruct)
         window.act_filter.triggered.connect(self.apply_filter)
+        window.act_select.triggered.connect(self.segment_cloud)
+        
+    def segment_cloud(self) -> None:
+        if not self._current_cloud_id:
+            QMessageBox.information(self.window, "Нет данных", "Сначала импортируйте облако точек.")
+            return
 
     def import_model(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
@@ -110,6 +118,27 @@ class AppController:
         except Exception as e:
             QMessageBox.critical(self.window, "Ошибка импорта модели", str(e))
 
+    def segment_cloud(self) -> None:
+        if not self._current_cloud_id:
+            QMessageBox.information(self.window, "Нет данных", "Сначала импортируйте облако точек.")
+            return
+
+        try:
+            pcd = self._cloud_o3d_by_id[self._current_cloud_id]
+
+            instructions_window = SecondaryWindow()
+            instructions_window.show()
+
+            o3d.visualization.draw_geometries_with_editing(
+                [pcd],
+                window_name="Сегментация",
+                width=1000,
+                height=800
+            )
+
+        except Exception as e:
+            self.window.set_status("Ошибка сегментации", progress=0)
+            QMessageBox.critical(self.window, "Ошибка сегментации", str(e))
 
 
     def import_cloud(self) -> None:

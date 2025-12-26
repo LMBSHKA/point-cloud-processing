@@ -46,8 +46,7 @@ class MainWindow(QMainWindow):
         self.act_filter = QAction("Фильтрация", self)
         self.act_downsample = QAction("Даунсемплинг", self)
 
-        self.act_select = QAction("Выделить", self)
-        self.act_isolate = QAction("Изолировать", self)
+        self.act_select = QAction("Выделить и изолировать", self)
 
         self.act_manual = QAction("Ручное", self)
         self.act_icp = QAction("ICP", self)
@@ -67,7 +66,7 @@ class MainWindow(QMainWindow):
         self._toolbar_group(tb, "Проект", [self.act_new, self.act_open, self.act_save])
         self._toolbar_group(tb, "Данные", [self.act_import_model, self.act_import_cloud])
         self._toolbar_group(tb, "Обработка", [self.act_filter, self.act_downsample])
-        self._toolbar_group(tb, "Сегментация", [self.act_select, self.act_isolate])
+        self._toolbar_group(tb, "Сегментация", [self.act_select])
         self._toolbar_group(tb, "Регистрация", [self.act_manual, self.act_icp])
         self._toolbar_group(tb, "Объёмы", [self.act_build_mesh, self.act_calc, self.act_compare])
         self._toolbar_group(tb, "Отчёт", [self.act_report])
