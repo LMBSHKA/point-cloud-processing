@@ -50,6 +50,20 @@ class SceneTree(QTreeWidget):
         self._node_by_obj_id[item.obj_id] = node
         self.expandAll()
 
+    def add_model(self, item: SceneItem) -> None:
+        """Добавляет объект в ветку «Модели»."""
+        self._items[item.obj_id] = item
+
+        node = QTreeWidgetItem([item.name])
+        node.setData(0, Qt.UserRole, item.obj_id)
+
+        node.setFlags(node.flags() | Qt.ItemIsUserCheckable)
+        node.setCheckState(0, Qt.Checked)
+
+        self.node_models.addChild(node)
+        self._node_by_obj_id[item.obj_id] = node
+        self.expandAll()
+
     def _on_item_clicked(self, item: QTreeWidgetItem) -> None:
         obj_id = item.data(0, Qt.UserRole)
         if isinstance(obj_id, str) and obj_id:

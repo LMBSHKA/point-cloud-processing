@@ -13,7 +13,7 @@ from app.Infrastructure.pointcloud_io import load_point_cloud_any
 def main() -> None:
     app = QApplication(sys.argv)
 
-    qss_path = os.path.join(os.path.dirname(__file__), "ui", "style.qss")
+    qss_path = os.path.join(os.path.dirname(__file__), "style", "style.qss")
 
     window = MainWindow(qss_path=qss_path)
 
