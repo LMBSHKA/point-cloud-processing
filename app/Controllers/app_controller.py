@@ -57,11 +57,6 @@ class AppController:
         window.act_filter.triggered.connect(self.apply_filter)
         window.act_select.triggered.connect(self.segment_cloud)
         
-    def segment_cloud(self) -> None:
-        if not self._current_cloud_id:
-            QMessageBox.information(self.window, "Нет данных", "Сначала импортируйте облако точек.")
-            return
-
     def import_model(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
             self.window,
