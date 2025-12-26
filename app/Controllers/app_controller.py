@@ -41,6 +41,10 @@ class AppController:
         self._mesh_by_id: dict[str, o3d.geometry.TriangleMesh] = {}
         self._current_mesh_id: str | None = None
 
+        self._selected_id: str | None = None
+        self._instructions_window = None  # чтобы окно не закрывалось сборщиком мусора
+
+
 
     def bind(self, window) -> None:
         """
@@ -70,7 +74,7 @@ class AppController:
         path = Path(path_str)
         ext = path.suffix.lower()
         name = path.name
-        obj_id = f"model:{name}"
+        obj_id = str(uuid.uuid4())
 
         try:
             # 1) PCD — это point cloud
@@ -110,8 +114,20 @@ class AppController:
             self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="cloud", path=str(path)))
             self.window.viewer.show_point_cloud(obj_id, pts)
 
+            self._selected_id = obj_id
+            self._current_cloud_id = obj_id   # только если это облако
+            self._current_mesh_id = obj_id    # только если это меш
+
+
         except Exception as e:
             QMessageBox.critical(self.window, "Ошибка импорта модели", str(e))
+
+    def _show_only(self, obj_id: str) -> None:
+        # скрыть всё, что уже есть в viewer
+        for oid in list(self._cloud_preview_by_id.keys()):
+            self.window.viewer.set_visible(oid, oid == obj_id)
+        for oid in list(self._mesh_by_id.keys()):
+            self.window.viewer.set_visible(oid, oid == obj_id)
 
     def segment_cloud(self) -> None:
         if not self._current_cloud_id:
@@ -187,20 +203,26 @@ class AppController:
 
 
     def on_tree_selected(self, obj_id: str) -> None:
+        self._selected_id = obj_id
+
         pts = self._cloud_preview_by_id.get(obj_id)
         if pts is not None:
+            self._current_cloud_id = obj_id
+            self._current_mesh_id = None
             self.window.viewer.show_point_cloud(obj_id, pts)
+            self._show_only(obj_id)
             return
 
         mesh = self._mesh_by_id.get(obj_id)
         if mesh is not None:
-            import numpy as np
+            self._current_mesh_id = obj_id
+            self._current_cloud_id = None
             V = np.asarray(mesh.vertices)
             F = np.asarray(mesh.triangles)
             if V.size and F.size:
                 self.window.viewer.show_mesh(obj_id, V, F)
+                self._show_only(obj_id)
             return
-
 
     def on_visibility_changed(self, obj_id: str, visible: bool) -> None:
         self.window.viewer.set_visible(obj_id, visible)
@@ -238,16 +260,23 @@ class AppController:
             )
 
             mesh, out_path = run_reconstruction(args, return_mesh=True)
-
             mesh_id = str(uuid.uuid4())
             self._mesh_by_id[mesh_id] = mesh
             self._current_mesh_id = mesh_id
+            self._selected_id = mesh_id
+
+            self.window.tree.add_model(SceneItem(
+                obj_id=mesh_id,
+                name=f"mesh_{mesh_id[:8]}.ply",
+                kind="mesh",
+                path=""  # или путь сохранения, если сделаешь сохранение
+            ))
 
             import numpy as np
             V = np.asarray(mesh.vertices)
             F = np.asarray(mesh.triangles)
             self.window.viewer.show_mesh(mesh_id, V, F)
-
+            self._show_only(mesh_id)
             self.window.set_status("Готово: мэш построен", progress=100)
 
         except Exception as e:
@@ -256,7 +285,7 @@ class AppController:
     
     def apply_filter(self) -> None:
         if not self._current_cloud_id:
-            QMessageBox.information(self.window, "Нет данных", "Сначала импортируйте облако точек.")
+            QMessageBox.information(self.window, "Нет данных", "Выберите облако точек в дереве.")
             return
 
         try:
