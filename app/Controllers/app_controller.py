@@ -98,8 +98,16 @@ class AppController:
                 V = np.asarray(mesh.vertices, dtype=np.float32)
                 F = np.asarray(mesh.triangles, dtype=np.int32)
 
+                # Передаём vertex normals из Open3D в Viewer3D (это убирает визуальные швы в VTK)
+                if not mesh.has_vertex_normals():
+                    try:
+                        mesh.compute_vertex_normals()
+                    except Exception:
+                        pass
+                N = np.asarray(mesh.vertex_normals, dtype=np.float32) if mesh.has_vertex_normals() else None
+
                 self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="mesh", path=str(path)))
-                self.window.viewer.show_mesh(obj_id, V, F)
+                self.window.viewer.show_mesh(obj_id, V, F, N)
                 return
 
             # 3) Если не mesh — читаем как облако точек
@@ -220,7 +228,7 @@ class AppController:
             V = np.asarray(mesh.vertices)
             F = np.asarray(mesh.triangles)
             if V.size and F.size:
-                self.window.viewer.show_mesh(obj_id, V, F)
+                self.window.viewer.show_mesh(obj_id, V, F, N)
                 self._show_only(obj_id)
             return
 
@@ -275,6 +283,12 @@ class AppController:
             import numpy as np
             V = np.asarray(mesh.vertices)
             F = np.asarray(mesh.triangles)
+            if not mesh.has_vertex_normals():
+                try:
+                    mesh.compute_vertex_normals()
+                except Exception:
+                    pass
+            N = np.asarray(mesh.vertex_normals) if mesh.has_vertex_normals() else None
             self.window.viewer.show_mesh(mesh_id, V, F)
             self._show_only(mesh_id)
             self.window.set_status("Готово: мэш построен", progress=100)

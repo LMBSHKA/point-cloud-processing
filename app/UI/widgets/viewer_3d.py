@@ -8,8 +8,14 @@ from PySide6.QtWidgets import QWidget
 
 class Viewer3D(QWidget):
     """
-    Обёртка над PyVista (QtInteractor).
-    Умеет показывать облака точек, меши и управлять видимостью.
+    PyVista viewer для облаков и мешей.
+
+    ВАЖНО (про "трещины" в UI):
+    - VTK плохо переносит большие мировые координаты -> нормализуем ДО PolyData.
+    - Визуальные "трещины" на гладких поверхностях чаще всего из-за неконсистентных
+      нормалей/швов. Open3D при построении меша считает хорошие vertex normals,
+      но раньше UI их терял и пересчитывал в VTK (что давало швы).
+      Поэтому: если нормали переданы — используем ИХ, не пересчитываем.
     """
 
     def __init__(self, parent=None) -> None:
@@ -32,11 +38,21 @@ class Viewer3D(QWidget):
         self._plotter.add_axes(
             interactive=False,
             line_width=2,
-            color="white"
+            color="white",
         )
 
-        self._plotter.enable_parallel_projection()
-        # Без позиционных аргументов:
+        # Перспектива обычно даёт меньше артефактов на тонких поверхностях.
+        try:
+            self._plotter.disable_parallel_projection()
+        except Exception:
+            pass
+
+        # Depth peeling иногда помогает со сложными сценами, почти ничего не ломает.
+        try:
+            self._plotter.enable_depth_peeling(number_of_peels=8, occlusion_ratio=0.0)
+        except Exception:
+            pass
+
         self._plotter.reset_camera(render=False)
         self._plotter.render()
 
@@ -45,17 +61,52 @@ class Viewer3D(QWidget):
         self._actors.clear()
         self._init_scene()
 
+    # ----------------------------
+    # Normalization for VIEW (numpy)
+    # ----------------------------
+
+    @staticmethod
+    def _normalize_points_for_view(
+        pts: np.ndarray,
+        *,
+        target_size: float = 2.0,
+    ) -> np.ndarray:
+        """
+        Переносит точки к центру и масштабирует по max extent -> локальные координаты.
+        Делается в float64, затем отдаём float32.
+        """
+        pts = np.asarray(pts, dtype=np.float64)
+        if pts.size == 0:
+            return pts.astype(np.float32)
+
+        mins = np.nanmin(pts, axis=0)
+        maxs = np.nanmax(pts, axis=0)
+        center = (mins + maxs) * 0.5
+        extent = np.maximum(maxs - mins, 0.0)
+        max_extent = float(np.max(extent))
+
+        if not np.isfinite(max_extent) or max_extent <= 0.0:
+            return (pts - center).astype(np.float32)
+
+        scale = float(target_size / max_extent)
+        out = (pts - center) * scale
+        return out.astype(np.float32)
+
+    def _set_clipping_for_view(self) -> None:
+        # Для нормализованной сцены держим умеренный far/near.
+        try:
+            self._plotter.camera.SetClippingRange(0.01, 50.0)
+        except Exception:
+            pass
+
     def _reset_camera_to_bounds(self, bounds, zoom: float = 1.2) -> None:
-        """
-        Единая безопасная функция сброса камеры без deprecated-позиционных аргументов.
-        """
-        # bounds может быть None/битым — на всякий
         if bounds is None:
             self._plotter.reset_camera(render=True)
+            self._set_clipping_for_view()
             return
 
-        # Передаём bounds именованно + render именованно (это убирает warning)
         self._plotter.reset_camera(bounds=bounds, render=True)
+        self._set_clipping_for_view()
 
         if zoom and zoom != 1.0:
             try:
@@ -65,11 +116,11 @@ class Viewer3D(QWidget):
 
         self._plotter.render()
 
-    def show_point_cloud(self, obj_id: str, points: np.ndarray) -> None:
-        """
-        Отображает облако точек.
-        """
-        # Удаляем старый актор, если был
+    # ----------------------------
+    # Helpers
+    # ----------------------------
+
+    def _remove_actor_if_exists(self, obj_id: str) -> None:
         if obj_id in self._actors:
             try:
                 self._plotter.remove_actor(self._actors[obj_id])
@@ -77,43 +128,93 @@ class Viewer3D(QWidget):
                 pass
             self._actors.pop(obj_id, None)
 
-        pts = np.asarray(points, dtype=np.float32)
-        cloud = pv.PolyData(pts)
+    @staticmethod
+    def _set_phong(actor) -> None:
+        try:
+            prop = actor.GetProperty()
+            if prop is not None:
+                prop.SetInterpolationToPhong()
+                prop.SetEdgeVisibility(False)
+        except Exception:
+            pass
+
+    # ----------------------------
+    # Public API
+    # ----------------------------
+
+    def show_point_cloud(self, obj_id: str, points: np.ndarray) -> None:
+        """Отображает облако точек."""
+        self._remove_actor_if_exists(obj_id)
+
+        pts = np.asarray(points, dtype=np.float64)
+        if pts.size == 0:
+            return
+
+        pts_view = self._normalize_points_for_view(pts, target_size=2.0)
+        cloud = pv.PolyData(pts_view)
 
         actor = self._plotter.add_points(
             cloud,
             point_size=2,
             render_points_as_spheres=False,
-            color="white"
+            color="white",
         )
         self._actors[obj_id] = actor
-
         self._reset_camera_to_bounds(cloud.bounds, zoom=1.2)
 
-    def show_mesh(self, obj_id: str, vertices, triangles) -> None:
+    def show_mesh(self, obj_id: str, vertices, triangles, normals=None) -> None:
         """
         Отображает треугольный меш.
-        """
-        V = np.asarray(vertices, dtype=np.float32)
-        F = np.asarray(triangles, dtype=np.int64)
 
+        normals (опционально): vertex normals (N x 3) из Open3D.
+        Если переданы — используем их и НЕ пересчитываем в VTK,
+        чтобы не появлялись швы/"трещины".
+        """
+        self._remove_actor_if_exists(obj_id)
+
+        V = np.asarray(vertices, dtype=np.float64)
+        F = np.asarray(triangles, dtype=np.int64)
         if V.size == 0 or F.size == 0:
             return
 
-        faces = np.hstack([np.full((F.shape[0], 1), 3, dtype=np.int64), F]).ravel()
-        mesh = pv.PolyData(V, faces)
+        V_view = self._normalize_points_for_view(V, target_size=2.0)
 
-        # Удаляем старый актор
-        if obj_id in self._actors:
+        faces = np.hstack([np.full((F.shape[0], 1), 3, dtype=np.int64), F]).ravel()
+        mesh = pv.PolyData(V_view, faces)
+
+        # Если нормали переданы — назначаем их напрямую.
+        if normals is not None:
+            N = np.asarray(normals, dtype=np.float32)
+            if N.shape[0] == V.shape[0] and N.shape[1] == 3:
+                mesh.point_data["Normals"] = N
+                try:
+                    mesh.active_normals_name = "Normals"
+                except Exception:
+                    pass
+        else:
+            # Иначе считаем максимально "мягко" (feature_angle=180 без split)
             try:
-                self._plotter.remove_actor(self._actors[obj_id])
+                mesh.compute_normals(
+                    point_normals=True,
+                    cell_normals=False,
+                    consistent_normals=True,
+                    auto_orient_normals=False,
+                    split_vertices=False,
+                    feature_angle=180.0,
+                    inplace=True,
+                )
             except Exception:
                 pass
-            self._actors.pop(obj_id, None)
 
-        actor = self._plotter.add_mesh(mesh, smooth_shading=True)
+        actor = self._plotter.add_mesh(
+            mesh,
+            smooth_shading=True,
+            show_edges=False,
+            lighting=True,
+        )
+        self._set_phong(actor)
+
         self._actors[obj_id] = actor
-
         self._reset_camera_to_bounds(mesh.bounds, zoom=1.2)
 
     def set_visible(self, obj_id: str, visible: bool) -> None:

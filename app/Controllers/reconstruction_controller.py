@@ -6,7 +6,7 @@ from app.Infrastructure.pointcloud_io import load_point_cloud_any
 from app.Infrastructure.output import save_step_geometry
 from app.UI.visualization import show_geometry
 from app.Core.pointcloud_preprocess import normalize_point_cloud, preprocess_point_cloud, smooth_mesh_soft
-from app.Core.mesh_reconstruction import reconstruct_poisson, reconstruct_bpa
+from app.Core.mesh_reconstruction import reconstruct_poisson, reconstruct_bpa, clean_mesh_o3d
 from app.Core.mesh_postprocess import (
     straighten_slab_sides,
     remove_long_triangles,
@@ -110,6 +110,8 @@ def run_reconstruction(args, *, return_mesh: bool = False) -> None:
     # Удаляем все мелкие оторванные куски, оставляем только основной объект
     mesh_norm = keep_largest_component(mesh_norm)
 
+    mesh_norm = clean_mesh_o3d(mesh_norm, smooth_iters=1)
+
     # 4.3. Финальное мягкое сглаживание
     mesh_norm = smooth_mesh_soft(mesh_norm, iterations=5)
 
@@ -133,9 +135,6 @@ def run_reconstruction(args, *, return_mesh: bool = False) -> None:
     print(f"[IO] Writing mesh to {out_path} ...")
     o3d.io.write_triangle_mesh(str(out_path), mesh, write_ascii=False)
     print("[Done] Finished.")
-
-    # 7. Визуализация
-    o3d.io.write_triangle_mesh(str(out_path), mesh, write_ascii=False)
 
     if getattr(args, "show_final", True):
         show_geometry(mesh, "FINAL RESULT")

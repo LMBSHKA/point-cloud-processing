@@ -127,3 +127,21 @@ def reconstruct_bpa(
     mesh.remove_degenerate_triangles()
     mesh.compute_vertex_normals()
     return mesh
+
+def clean_mesh_o3d(mesh: o3d.geometry.TriangleMesh, *, smooth_iters: int = 1) -> o3d.geometry.TriangleMesh:
+    mesh.remove_duplicated_vertices()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_degenerate_triangles()
+    mesh.remove_unreferenced_vertices()
+
+    # критично для углов и "наложений"
+    mesh.remove_non_manifold_edges()
+
+    mesh.compute_vertex_normals()
+
+    if smooth_iters > 0:
+        mesh = mesh.filter_smooth_simple(number_of_iterations=int(smooth_iters))
+        mesh.compute_vertex_normals()
+
+    return mesh
+
