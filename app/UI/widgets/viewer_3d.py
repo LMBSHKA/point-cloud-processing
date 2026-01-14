@@ -46,13 +46,13 @@ class Viewer3D(QWidget):
             self._plotter.disable_parallel_projection()
         except Exception:
             pass
-
+        '''
         # Depth peeling иногда помогает со сложными сценами, почти ничего не ломает.
         try:
             self._plotter.enable_depth_peeling(number_of_peels=8, occlusion_ratio=0.0)
         except Exception:
             pass
-
+        '''
         self._plotter.reset_camera(render=False)
         self._plotter.render()
 
@@ -93,11 +93,24 @@ class Viewer3D(QWidget):
         return out.astype(np.float32)
 
     def _set_clipping_for_view(self) -> None:
-        # Для нормализованной сцены держим умеренный far/near.
         try:
-            self._plotter.camera.SetClippingRange(0.01, 50.0)
+            cam = self._plotter.camera
+            pos = np.array(cam.position, dtype=np.float64)
+            fp  = np.array(cam.focal_point, dtype=np.float64)
+            dist = float(np.linalg.norm(pos - fp))
+            if not np.isfinite(dist) or dist <= 1e-9:
+                dist = 5.0
+
+            # near не должен быть слишком маленьким -> иначе “трещины”
+            near = max(dist * 0.02, 0.05)
+            far  = dist * 8.0
+            if far <= near:
+                far = near * 10.0
+
+            cam.SetClippingRange(float(near), float(far))
         except Exception:
             pass
+
 
     def _reset_camera_to_bounds(self, bounds, zoom: float = 1.2) -> None:
         if bounds is None:
@@ -135,6 +148,7 @@ class Viewer3D(QWidget):
             if prop is not None:
                 prop.SetInterpolationToPhong()
                 prop.SetEdgeVisibility(False)
+                prop.BackfaceCullingOff()
         except Exception:
             pass
 
@@ -181,37 +195,44 @@ class Viewer3D(QWidget):
 
         faces = np.hstack([np.full((F.shape[0], 1), 3, dtype=np.int64), F]).ravel()
         mesh = pv.PolyData(V_view, faces)
+        # --- FIX 1: merge nearly-duplicate points (render-only) ---
+        try:
+            mesh = mesh.clean(tolerance=1e-6, inplace=False)  # в view-координатах
+        except Exception:
+            pass
 
-        # Если нормали переданы — назначаем их напрямую.
-        if normals is not None:
-            N = np.asarray(normals, dtype=np.float32)
-            if N.shape[0] == V.shape[0] and N.shape[1] == 3:
-                mesh.point_data["Normals"] = N
-                try:
-                    mesh.active_normals_name = "Normals"
-                except Exception:
-                    pass
-        else:
-            # Иначе считаем максимально "мягко" (feature_angle=180 без split)
-            try:
-                mesh.compute_normals(
-                    point_normals=True,
-                    cell_normals=False,
-                    consistent_normals=True,
-                    auto_orient_normals=False,
-                    split_vertices=False,
-                    feature_angle=180.0,
-                    inplace=True,
-                )
-            except Exception:
-                pass
+        # --- FIX 2: stable normals for VTK shading ---
+        try:
+            mesh.compute_normals(
+                point_normals=True,
+                cell_normals=False,
+                consistent_normals=True,
+                auto_orient_normals=True,
+                split_vertices=False,
+                feature_angle=180.0,
+                inplace=True,
+            )
+        except Exception:
+            pass
 
         actor = self._plotter.add_mesh(
             mesh,
             smooth_shading=True,
             show_edges=False,
             lighting=True,
+            scalars=None,
+            show_scalar_bar=False,
+            color="#5C5C5C",
         )
+        # --- FIX 3: anti z-fighting for coincident triangles ---
+        try:
+            mapper = actor.GetMapper()
+            if mapper is not None:
+                mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1.0, 1.0)
+        except Exception:
+            pass
+
         self._set_phong(actor)
 
         self._actors[obj_id] = actor

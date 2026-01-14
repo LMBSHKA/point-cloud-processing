@@ -130,6 +130,7 @@ def run_reconstruction(args, *, return_mesh: bool = False) -> None:
     # Поворот на +90° вокруг X
     R = mesh.get_rotation_matrix_from_xyz((np.pi / 2, 0.0, 0.0))
     mesh.rotate(R, center=(0.0, 0.0, 0.0))
+    mesh.compute_vertex_normals()
 
     # 6. Сохраняем
     print(f"[IO] Writing mesh to {out_path} ...")

@@ -6,6 +6,8 @@ import numpy as np
 import open3d as o3d
 import laspy
 from pye57 import E57
+import hashlib
+
 
 """
 Загрузить облако точек из LAS/LAZ-файла и конвертировать его в Open3D PointCloud.
@@ -35,6 +37,14 @@ from pye57 import E57
         Объект облака точек Open3D с заполненными полями `points`
         и (опционально) `colors`.
 """
+
+def _stable_rng_from_path(path: Path) -> np.random.Generator:
+    # стабильный seed из пути (одинаковый для UI/CLI)
+    h = hashlib.blake2b(str(path).encode("utf-8"), digest_size=8).digest()
+    seed = int.from_bytes(h, "little", signed=False) & 0xFFFFFFFF
+    return np.random.default_rng(seed)
+
+
 def load_laz(path: Path, max_points: Optional[int] = None) -> o3d.geometry.PointCloud:
     print(f"[LAZ] Reading {path} ...")
     las = laspy.read(str(path))
@@ -44,10 +54,12 @@ def load_laz(path: Path, max_points: Optional[int] = None) -> o3d.geometry.Point
 
     # выбираем индексы, с которыми будем работать
     if max_points is not None and total > max_points:
-        idx = np.random.choice(total, max_points, replace=False)
+        rng = _stable_rng_from_path(path)
+        idx = rng.choice(total, max_points, replace=False)
         print(f"[LAZ] Downsampled to {max_points} points")
     else:
         idx = np.arange(total)
+
 
     # вытаскиваем только нужные точки и сразу приводим к float32
     x = np.asarray(las.x[idx], dtype=np.float32)
@@ -132,9 +144,11 @@ def load_e57(path: Path, max_points: Optional[int] = None) -> o3d.geometry.Point
 
     idx = None
     if max_points is not None and points.shape[0] > max_points:
-        idx = np.random.choice(points.shape[0], max_points, replace=False)
+        rng = _stable_rng_from_path(path)
+        idx = rng.choice(points.shape[0], max_points, replace=False)
         points = points[idx]
         print(f"[E57] Downsampled to {points.shape[0]} points")
+
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
@@ -192,7 +206,9 @@ def load_point_cloud_any(path: Path, max_points: Optional[int] = None) -> o3d.ge
         # если нужно ограничить max_points — случайно выберем подмножество
         if max_points is not None and len(pcd.points) > max_points:
             pts = np.asarray(pcd.points)
-            idx = np.random.choice(pts.shape[0], max_points, replace=False)
+            rng = _stable_rng_from_path(path)
+            idx = rng.choice(pts.shape[0], max_points, replace=False)
+
             pcd2 = o3d.geometry.PointCloud()
             pcd2.points = o3d.utility.Vector3dVector(pts[idx])
 

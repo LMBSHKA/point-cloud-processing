@@ -43,6 +43,8 @@ class AppController:
 
         self._selected_id: str | None = None
         self._instructions_window = None  # чтобы окно не закрывалось сборщиком мусора
+        self._cloud_path_by_id: dict[str, str] = {}
+
 
 
 
@@ -193,6 +195,7 @@ class AppController:
             pts_preview = pts_preview.astype(np.float32, copy=False)
 
             obj_id = str(uuid.uuid4())
+            self._cloud_path_by_id[obj_id] = path
             name = os.path.basename(path)
 
             self._cloud_o3d_by_id[obj_id] = pcd
@@ -250,28 +253,26 @@ class AppController:
 
             # ВАЖНО: мы должны реконструировать из файла, как CLI, чтобы совпало поведение
             # Сохрани текущий pcd во временный ply (или храни путь при импорте)
-            import tempfile, os
             import open3d as o3d
 
-            item_pcd = self._cloud_o3d_by_id[self._current_cloud_id]
-            tmp_dir = tempfile.mkdtemp(prefix="laser_recon_")
-            tmp_ply = os.path.join(tmp_dir, "input_work.ply")
-            o3d.io.write_point_cloud(tmp_ply, item_pcd)
+            src_path = self._cloud_path_by_id.get(self._current_cloud_id)
+            if not src_path:
+                raise RuntimeError("Не найден исходный путь облака (cloud_path_by_id).")
 
             args = SimpleNamespace(
-                input=tmp_ply,
+                input=src_path,        # <-- как в CLI
                 output=None,
-                method="bpa",          # потом сделаем выбор в UI
+                method="bpa",
                 max_points=1_500_000,
-                voxel_size=0.005,      # как в консоли
+                voxel_size=0.005,
                 depth=10,
                 keep_ratio=0.05,
                 show_steps=False,
                 save_steps=False,
                 show_final=False,
             )
-
             mesh, out_path = run_reconstruction(args, return_mesh=True)
+
             mesh_id = str(uuid.uuid4())
             self._mesh_by_id[mesh_id] = mesh
             self._current_mesh_id = mesh_id
@@ -293,7 +294,7 @@ class AppController:
                 except Exception:
                     pass
             N = np.asarray(mesh.vertex_normals) if mesh.has_vertex_normals() else None
-            self.window.viewer.show_mesh(mesh_id, V, F)
+            self.window.viewer.show_mesh(mesh_id, V, F, N)
             self._show_only(mesh_id)
             self.window.set_status("Готово: мэш построен", progress=100)
 
