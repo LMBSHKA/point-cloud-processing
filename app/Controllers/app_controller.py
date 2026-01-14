@@ -225,12 +225,16 @@ class AppController:
         if mesh is not None:
             self._current_mesh_id = obj_id
             self._current_cloud_id = None
+
             V = np.asarray(mesh.vertices)
             F = np.asarray(mesh.triangles)
+            N = np.asarray(mesh.vertex_normals)  # ← ВОТ ЭТОГО НЕ ХВАТАЛО
+
             if V.size and F.size:
                 self.window.viewer.show_mesh(obj_id, V, F, N)
                 self._show_only(obj_id)
             return
+
 
     def on_visibility_changed(self, obj_id: str, visible: bool) -> None:
         self.window.viewer.set_visible(obj_id, visible)
