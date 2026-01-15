@@ -75,3 +75,18 @@ class SceneTree(QTreeWidget):
             return
         visible = item.checkState(0) == Qt.Checked
         self.visibility_changed.emit(obj_id, visible)
+
+    def set_only_visible_checked(self, obj_id: str) -> None:
+        """Оставить галочку только у obj_id (остальные снять)."""
+        self.blockSignals(True)
+        try:
+            for oid, node in self._node_by_obj_id.items():
+                node.setCheckState(0, Qt.Checked if oid == obj_id else Qt.Unchecked)
+        finally:
+            self.blockSignals(False)
+
+    def select_object(self, obj_id: str) -> None:
+        """Выделить элемент в дереве по obj_id."""
+        node = self._node_by_obj_id.get(obj_id)
+        if node is not None:
+            self.setCurrentItem(node)

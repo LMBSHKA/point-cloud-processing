@@ -90,6 +90,11 @@ class AppController:
                 self._cloud_preview_by_id[obj_id] = pts
                 self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="cloud", path=str(path)))
                 self.window.viewer.show_point_cloud(obj_id, pts)
+                self._selected_id = obj_id
+                self._current_cloud_id = obj_id
+                self._current_mesh_id = None
+
+                self._activate_new_object(obj_id)
                 return
 
             # 2) Сначала пробуем mesh (особенно важно для PLY)
@@ -110,6 +115,11 @@ class AppController:
 
                 self.window.tree.add_model(SceneItem(obj_id=obj_id, name=name, kind="mesh", path=str(path)))
                 self.window.viewer.show_mesh(obj_id, V, F, N)
+                self._selected_id = obj_id
+                self._current_mesh_id = obj_id
+                self._current_cloud_id = None
+
+                self._activate_new_object(obj_id)
                 return
 
             # 3) Если не mesh — читаем как облако точек
@@ -125,8 +135,8 @@ class AppController:
             self.window.viewer.show_point_cloud(obj_id, pts)
 
             self._selected_id = obj_id
-            self._current_cloud_id = obj_id   # только если это облако
-            self._current_mesh_id = obj_id    # только если это меш
+            #self._current_cloud_id = obj_id   # только если это облако
+            #self._current_mesh_id = obj_id    # только если это меш
 
 
         except Exception as e:
@@ -205,12 +215,30 @@ class AppController:
             self.window.tree.add_cloud(SceneItem(obj_id=obj_id, name=name, kind="cloud", path=path))
             self.window.viewer.show_point_cloud(obj_id, pts_preview)
 
+            self._selected_id = obj_id
+            self._current_cloud_id = obj_id
+            self._current_mesh_id = None
+
+            self._activate_new_object(obj_id)
+
             self.window.set_status(f"Импортировано: {name} (точек: {len(pcd.points):,})", progress=100)
 
 
         except Exception as e:
             self.window.set_status("Ошибка импорта", progress=0)
             QMessageBox.critical(self.window, "Ошибка импорта", str(e))
+    
+    def _activate_new_object(self, obj_id: str) -> None:
+        # 1) скрыть все остальные в viewer
+        self._show_only(obj_id)
+
+        # 2) в дереве оставить галочку только у нового и выделить его
+        self.window.tree.set_only_visible_checked(obj_id)
+        self.window.tree.select_object(obj_id)
+
+        # 3) камера на новый объект
+        if hasattr(self.window.viewer, "focus_on"):
+            self.window.viewer.focus_on(obj_id)
 
 
     def on_tree_selected(self, obj_id: str) -> None:
@@ -295,6 +323,7 @@ class AppController:
                     pass
             N = np.asarray(mesh.vertex_normals) if mesh.has_vertex_normals() else None
             self.window.viewer.show_mesh(mesh_id, V, F, N)
+            self._activate_new_object(mesh_id)
             self._show_only(mesh_id)
             self.window.set_status("Готово: мэш построен", progress=100)
 

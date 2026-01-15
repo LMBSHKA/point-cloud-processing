@@ -247,3 +247,14 @@ class Viewer3D(QWidget):
             self._plotter.render()
         except Exception:
             pass
+    
+    def focus_on(self, obj_id: str) -> None:
+        actor = self._actors.get(obj_id)
+        if actor is None:
+            return
+        try:
+            b = actor.GetBounds()  # (xmin,xmax,ymin,ymax,zmin,zmax)
+            self._plotter.reset_camera(bounds=b)
+        except Exception:
+            self._plotter.reset_camera()
+        self._plotter.render()
