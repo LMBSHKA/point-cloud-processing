@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QPushButton,
+    QToolButton,
+    QComboBox
 )
 
 from app.UI.widgets.scene_tree import SceneTree
@@ -35,31 +37,32 @@ class MainWindow(QMainWindow):
         self._apply_qss(qss_path)
 
     def _build_actions(self) -> None:
-        # toolbar actions
-        self.act_new = QAction("Новый\nдокумент", self)
-        self.act_open = QAction("Открыть\nдокумент", self)
-        self.act_save = QAction("Сохранить\nдокумент", self)
+        icons_path = os.path.join(os.path.dirname(__file__))
+        self.act_new = QAction(QIcon(icons_path + "/icons/new.png"), "Новый\nдокумент", self)
+        self.act_open = QAction(QIcon(icons_path + "/icons/open.png"), "Открыть\nдокумент", self)
+        self.act_save = QAction(QIcon(icons_path + "./icons/save.png"), "Сохранить\nдокумент", self)
 
-        self.act_import_model = QAction("Импорт\nмодели", self)
-        self.act_import_cloud = QAction("Импорт\nоблака", self)
+        self.act_import_model = QAction(QIcon(icons_path + "/icons/import-model.png"), "Импорт\nмодели", self)
+        self.act_import_cloud = QAction(QIcon(icons_path + "/icons/import-cloud.png"), "Импорт\nоблака", self)
 
-        self.act_filter = QAction("Фильтрация", self)
-        self.act_downsample = QAction("Даунсемплинг", self)
+        self.act_filter = QAction(QIcon(icons_path + "/icons/filter.png"), "Фильтрация", self)
+        self.act_downsample = QAction(QIcon(icons_path + "/icons/downsampling.png"), "Даунсемплинг", self)
 
-        self.act_select = QAction("Выделить и изолировать", self)
+        self.act_select = QAction(QIcon(icons_path + "/icons/segment.png"), "Выделить и\n изолировать", self)
 
-        self.act_manual = QAction("Ручное", self)
-        self.act_icp = QAction("ICP", self)
+        self.act_manual = QAction(QIcon(icons_path + "/icons/reg.png"), "Ручная", self)
+        self.act_icp = QAction(QIcon(icons_path + "/icons/ICP.png"), "ICP", self)
 
-        self.act_build_mesh = QAction("Построить\nмэш", self)
-        self.act_calc = QAction("Рассчитать", self)
-        self.act_compare = QAction("Сравнить", self)
+        self.act_build_mesh = QAction(QIcon(icons_path + "/icons/mash.png"), "Построить\nмэш", self)
+        self.act_calc = QAction(QIcon(icons_path + "/icons/calc.png"), "Рассчитать", self)
+        self.act_compare = QAction(QIcon(icons_path + "/icons/compare.png"), "Сравнить", self)
 
-        self.act_report = QAction("Создать\nPDF", self)
+        self.act_report = QAction(QIcon(icons_path + "/icons/new.png"), "Создать\nPDF", self)
 
     def _build_ui(self) -> None:
         # Toolbar
         tb = QToolBar()
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         tb.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, tb)
 
@@ -96,7 +99,7 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
         self.setCentralWidget(central)
 
@@ -112,24 +115,43 @@ class MainWindow(QMainWindow):
 
     def _toolbar_group(self, toolbar: QToolBar, title: str, actions: list[QAction]) -> None:
         lbl = QLabel(title)
-        lbl.setStyleSheet("color: #E6E8F0; font-size: 13px; padding: 0 10px;")
-        toolbar.addWidget(lbl)
+        container_buttons = QWidget()
+        button_layout = QHBoxLayout(container_buttons)
+        lbl.setStyleSheet("color: #E6E8F0; font-size: 13px; padding: 0px;")
         for a in actions:
-            toolbar.addAction(a)
+            button = QToolButton()
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            button.setDefaultAction(a)
+            button_layout.addWidget(button)
+        container_toolbar = QWidget()
+        main_layout = QVBoxLayout(container_toolbar)
+        main_layout.addWidget(lbl, alignment=Qt.AlignHCenter)
+        main_layout.addWidget(container_buttons)
+        toolbar.addWidget(container_toolbar)
         toolbar.addSeparator()
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
     # ---- Tabs (пока заглушки, но структура как в ТЗ) ----
     def _tab_preprocess(self) -> QWidget:
         w = QWidget()
         l = QVBoxLayout(w)
         l.setContentsMargins(12, 12, 12, 12)
-
+       
         gb = QGroupBox("Фильтрация")
         g = QVBoxLayout(gb)
+        g.addWidget(QLabel("Метод"))
+        cb = QComboBox()
+        cb.setPlaceholderText("Название метода")
+        g.addWidget(cb)
         g.addWidget(QLabel("Количество соседей"))
-        g.addWidget(QLineEdit())
+        le1 = QLineEdit()
+        le1.setPlaceholderText("Введите число")
+        g.addWidget(le1)
         g.addWidget(QLabel("Порог"))
-        g.addWidget(QLineEdit())
+        le2 = QLineEdit()
+        le2.setPlaceholderText("Введите число")
+        g.addWidget(le2)
 
         l.addWidget(gb)
         l.addStretch(1)
