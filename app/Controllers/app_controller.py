@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app.UI.widgets.scene_tree import SceneItem
 from app.Infrastructure.pointcloud_io import load_point_cloud_any
+from app.Infrastructure.filtering_adapter import FilterSettings
 #from services.io_service import IOService
 
 
@@ -44,7 +45,7 @@ class AppController:
         self._selected_id: str | None = None
         self._instructions_window = None  # чтобы окно не закрывалось сборщиком мусора
         self._cloud_path_by_id: dict[str, str] = {}
-
+        self._filter_settings: FilterSettings | None = None  # позже UI будет сюда писать
 
 
 
@@ -345,14 +346,7 @@ class AppController:
             pcd = self._cloud_o3d_by_id[self._current_cloud_id]
 
             # параметры как в твоём filtering.py
-            pcd2 = filter_pcd(
-                pcd,
-                nb_stat=28,
-                nb_radial=12,
-                std=0.5,
-                rad=0.08,
-                vox_size=0.05,
-            )
+            pcd2 = filter_pcd(pcd, settings=self._filter_settings)
 
             self._cloud_o3d_by_id[self._current_cloud_id] = pcd2
 
