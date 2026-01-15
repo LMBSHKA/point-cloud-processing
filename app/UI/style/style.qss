@@ -1,15 +1,17 @@
-* { font-family: "Segoe UI"; font-size: 12px; color: #E6E8F0; }
+* { font-family: "Montserrat"; font-size: 13px; font-weight: 400; color: #E6E8F0; }
 QMainWindow { background: #0B0F1E; }
 
-QToolBar { background: #2A2E46; border: none; padding: 8px; spacing: 10px; }
+QToolBar {width: fill; background: #2A2E46; border: none; padding: 8px; spacing: 10px; }
 QToolButton { background: transparent; border: none; padding: 6px 10px; }
+QToolButton { color: #82A6FF; background: #2A2E46; border: 1px solid #3A3E5A; border-radius: 8px; min-height: 50px; min-width: 30px; padding: 5px 2px}
 QToolButton:hover { background: rgba(255,255,255,0.06); border-radius: 6px; }
 QToolButton:pressed { background: rgba(47,107,255,0.18); }
 
 QTreeWidget { background: #0E1224; border: 1px solid #2A2E46; }
 QHeaderView::section { background: #0E1224; border: none; padding: 8px; font-size: 13px; }
 
-QTabWidget::pane { border: 1px solid #2A2E46; background: #0E1224; }
+QTabWidget::pane { border: 1px solid #2A2646; background: #0E1224; }
+QTabBar::scroller {width: 0px;}
 QTabBar::tab { background: #0E1224; border: 1px solid #2A2E46; padding: 10px 14px; min-width: 120px; }
 QTabBar::tab:selected { color: #2F6BFF; border-bottom: 2px solid #2F6BFF; }
 
@@ -18,6 +20,7 @@ QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 6px; color:
 
 QLineEdit, QComboBox { background: #2A2E46; border: 1px solid #3A3E5A; border-radius: 6px; padding: 8px; }
 QLineEdit:focus, QComboBox:focus { border: 1px solid #2F6BFF; }
+QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 15px; border-left-width: 1px; border-left-color: #3A3E5A; border-left-style: solid; border-top-right-radius: 6px; border-bottom-right-radius: 3px; }
 
 QPushButton { background: #2A2E46; border: 1px solid #3A3E5A; border-radius: 8px; padding: 10px 12px; }
 QPushButton:hover { background: rgba(255,255,255,0.06); }

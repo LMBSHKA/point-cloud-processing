@@ -8,11 +8,13 @@ from PySide6.QtWidgets import QApplication
 from app.UI.main_window import MainWindow
 from app.Controllers.app_controller import AppController
 from app.Infrastructure.pointcloud_io import load_point_cloud_any
+from PySide6.QtGui import QFontDatabase
 
 
 def main() -> None:
     app = QApplication(sys.argv)
-
+    font_path = os.path.join(os.path.dirname(__file__), "fonts", "Montserrat.ttf")
+    QFontDatabase.addApplicationFont(font_path)
     qss_path = os.path.join(os.path.dirname(__file__), "style", "style.qss")
 
     window = MainWindow(qss_path=qss_path)
