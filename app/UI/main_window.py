@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt
+from app.UI.resources import resource_path
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QLabel,
@@ -18,7 +19,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QToolButton,
-    QComboBox
+    QComboBox,
+    QApplication
 )
 
 from app.UI.widgets.scene_tree import SceneTree
@@ -37,27 +39,30 @@ class MainWindow(QMainWindow):
         self._apply_qss(qss_path)
 
     def _build_actions(self) -> None:
-        icons_path = os.path.join(os.path.dirname(__file__))
-        self.act_new = QAction(QIcon(icons_path + "/icons/new.png"), "Новый\nдокумент", self)
-        self.act_open = QAction(QIcon(icons_path + "/icons/open.png"), "Открыть\nдокумент", self)
-        self.act_save = QAction(QIcon(icons_path + "./icons/save.png"), "Сохранить\nдокумент", self)
+        def ico(name: str) -> QIcon:
+            return QIcon(resource_path("app", "UI", "icons", name))
 
-        self.act_import_model = QAction(QIcon(icons_path + "/icons/import-model.png"), "Импорт\nмодели", self)
-        self.act_import_cloud = QAction(QIcon(icons_path + "/icons/import-cloud.png"), "Импорт\nоблака", self)
+        self.act_new = QAction(ico("new.png"), "Новый\nдокумент", self)
+        self.act_open = QAction(ico("open.png"), "Открыть\nдокумент", self)
+        self.act_save = QAction(ico("save.png"), "Сохранить\nдокумент", self)
 
-        self.act_filter = QAction(QIcon(icons_path + "/icons/filter.png"), "Фильтрация", self)
-        self.act_downsample = QAction(QIcon(icons_path + "/icons/downsampling.png"), "Даунсемплинг", self)
+        self.act_import_model = QAction(ico("import-model.png"), "Импорт\nмодели", self)
+        self.act_import_cloud = QAction(ico("import-cloud.png"), "Импорт\nоблака", self)
 
-        self.act_select = QAction(QIcon(icons_path + "/icons/segment.png"), "Выделить и\n изолировать", self)
+        self.act_filter = QAction(ico("filter.png"), "Фильтрация", self)
+        self.act_downsample = QAction(ico("downsampling.png"), "Даунсемплинг", self)
 
-        self.act_manual = QAction(QIcon(icons_path + "/icons/reg.png"), "Ручная", self)
-        self.act_icp = QAction(QIcon(icons_path + "/icons/ICP.png"), "ICP", self)
+        self.act_select = QAction(ico("segment.png"), "Выделить и\nизолировать", self)
 
-        self.act_build_mesh = QAction(QIcon(icons_path + "/icons/mash.png"), "Построить\nмэш", self)
-        self.act_calc = QAction(QIcon(icons_path + "/icons/calc.png"), "Рассчитать", self)
-        self.act_compare = QAction(QIcon(icons_path + "/icons/compare.png"), "Сравнить", self)
+        self.act_manual = QAction(ico("reg.png"), "Ручная", self)
+        self.act_icp = QAction(ico("ICP.png"), "ICP", self)
 
-        self.act_report = QAction(QIcon(icons_path + "/icons/new.png"), "Создать\nPDF", self)
+        self.act_build_mesh = QAction(ico("mash.png"), "Построить\nмэш", self)
+        self.act_calc = QAction(ico("calc.png"), "Рассчитать", self)
+        self.act_compare = QAction(ico("compare.png"), "Сравнить", self)
+
+        self.act_report = QAction(ico("new.png"), "Создать\nPDF", self)
+
 
     def _build_ui(self) -> None:
         # Toolbar
@@ -222,7 +227,7 @@ class MainWindow(QMainWindow):
     def _apply_qss(self, qss_path: str) -> None:
         if qss_path and os.path.exists(qss_path):
             with open(qss_path, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
+                QApplication.instance().setStyleSheet(f.read())
 
     def set_status(self, text: str, progress: int | None = None) -> None:
         self.status_label.setText(text)

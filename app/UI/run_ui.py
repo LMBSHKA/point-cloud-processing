@@ -4,6 +4,7 @@ import os
 import sys
 
 from PySide6.QtWidgets import QApplication
+from app.UI.resources import resource_path
 
 from app.UI.main_window import MainWindow
 from app.Controllers.app_controller import AppController
@@ -13,10 +14,11 @@ from PySide6.QtGui import QFontDatabase
 
 def main() -> None:
     app = QApplication(sys.argv)
-    font_path = os.path.join(os.path.dirname(__file__), "fonts", "Montserrat.ttf")
-    QFontDatabase.addApplicationFont(font_path)
-    qss_path = os.path.join(os.path.dirname(__file__), "style", "style.qss")
 
+    font_path = resource_path("app", "UI", "fonts", "Montserrat.ttf")
+    QFontDatabase.addApplicationFont(font_path)
+
+    qss_path = resource_path("app", "UI", "style", "style.qss")
     window = MainWindow(qss_path=qss_path)
 
     controller = AppController(pointcloud_io=load_point_cloud_any)
