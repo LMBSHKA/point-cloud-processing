@@ -13,6 +13,7 @@ from app.Controllers.reconstruction_controller import run_reconstruction
 from app.UI.widgets.instructions import SecondaryWindow
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtCore import QObject, Signal, Slot, QThread, Qt
 
 from app.UI.widgets.scene_tree import SceneItem
 from app.Infrastructure.pointcloud_io import load_point_cloud_any
@@ -28,11 +29,36 @@ class ImportedObject:
     path: str
 
 
-class AppController:
+class ReconstructionWorker(QObject):
+    """
+    Фоновая реконструкция меша, чтобы UI не зависал.
+
+    Важно: любые обращения к UI (Viewer/Tree/StatusBar) делать только
+    в главном потоке через сигналы.
+    """
+
+    finished = Signal(object, str)  # mesh, out_path
+    failed = Signal(str)
+
+    def __init__(self, args) -> None:
+        super().__init__()
+        self._args = args
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            mesh, out_path = run_reconstruction(self._args, return_mesh=True)
+            self.finished.emit(mesh, str(out_path))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class AppController(QObject):
     """
     Клей: UI -> сервисы -> UI.
     """
     def __init__(self, pointcloud_io: Callable[[Path, Optional[int]], o3d.geometry.PointCloud]) -> None:
+        super().__init__()
         self.load_point_cloud_any = pointcloud_io
 
         self._cloud_o3d_by_id: dict[str, o3d.geometry.PointCloud] = {}
@@ -46,6 +72,10 @@ class AppController:
         self._instructions_window = None  # чтобы окно не закрывалось сборщиком мусора
         self._cloud_path_by_id: dict[str, str] = {}
         self._filter_settings: FilterSettings | None = None  # позже UI будет сюда писать
+
+        # держим ссылки, чтобы потоки/воркеры не уничтожались GC
+        self._recon_thread: QThread | None = None
+        self._recon_worker: ReconstructionWorker | None = None
 
 
 
@@ -277,31 +307,57 @@ class AppController:
             QMessageBox.information(self.window, "Нет данных", "Сначала импортируйте облако точек.")
             return
 
+        # не даём запускать несколько реконструкций одновременно
+        if self._recon_thread is not None and self._recon_thread.isRunning():
+            QMessageBox.information(self.window, "Реконструкция", "Реконструкция уже выполняется.")
+            return
+
+        src_path = self._cloud_path_by_id.get(self._current_cloud_id)
+        if not src_path:
+            QMessageBox.critical(self.window, "Ошибка реконструкции", "Не найден исходный путь облака (cloud_path_by_id).")
+            return
+
+        # Параметры пока по умолчанию (позже UI сможет менять)
+        args = SimpleNamespace(
+            input=src_path,
+            output=None,
+            method="bpa",
+            max_points=1_500_000,
+            voxel_size=0.005,
+            depth=10,
+            keep_ratio=0.05,
+            show_steps=False,
+            save_steps=False,
+            show_final=False,
+        )
+
+        # UI: показываем "занято" и блокируем кнопку
         try:
-            self.window.set_status("Реконструкция…", progress=20)
+            self.window.progress.setRange(0, 0)  # бесконечный прогресс
+        except Exception:
+            pass
+        self.window.set_status("Реконструкция…", progress=0)
+        self.window.act_build_mesh.setEnabled(False)
 
-            # ВАЖНО: мы должны реконструировать из файла, как CLI, чтобы совпало поведение
-            # Сохрани текущий pcd во временный ply (или храни путь при импорте)
-            import open3d as o3d
+        # --- Запускаем реконструкцию в отдельном потоке ---
+        self._recon_thread = QThread()
+        self._recon_worker = ReconstructionWorker(args)
+        self._recon_worker.moveToThread(self._recon_thread)
 
-            src_path = self._cloud_path_by_id.get(self._current_cloud_id)
-            if not src_path:
-                raise RuntimeError("Не найден исходный путь облака (cloud_path_by_id).")
+        self._recon_thread.started.connect(self._recon_worker.run)
+        self._recon_worker.finished.connect(self._on_reconstruction_done, Qt.QueuedConnection)
+        self._recon_worker.failed.connect(self._on_reconstruction_failed, Qt.QueuedConnection)
 
-            args = SimpleNamespace(
-                input=src_path,        # <-- как в CLI
-                output=None,
-                method="bpa",
-                max_points=1_500_000,
-                voxel_size=0.005,
-                depth=10,
-                keep_ratio=0.05,
-                show_steps=False,
-                save_steps=False,
-                show_final=False,
-            )
-            mesh, out_path = run_reconstruction(args, return_mesh=True)
+        # корректное завершение потока
+        self._recon_worker.finished.connect(self._recon_thread.quit)
+        self._recon_worker.failed.connect(self._recon_thread.quit)
+        self._recon_thread.finished.connect(self._cleanup_reconstruction_thread)
 
+        self._recon_thread.start()
+
+    @Slot(object, str)
+    def _on_reconstruction_done(self, mesh, out_path: str) -> None:
+        try:
             mesh_id = str(uuid.uuid4())
             self._mesh_by_id[mesh_id] = mesh
             self._current_mesh_id = mesh_id
@@ -311,7 +367,7 @@ class AppController:
                 obj_id=mesh_id,
                 name=f"mesh_{mesh_id[:8]}.ply",
                 kind="mesh",
-                path=""  # или путь сохранения, если сделаешь сохранение
+                path=str(out_path or "")
             ))
 
             import numpy as np
@@ -323,14 +379,39 @@ class AppController:
                 except Exception:
                     pass
             N = np.asarray(mesh.vertex_normals) if mesh.has_vertex_normals() else None
+
             self.window.viewer.show_mesh(mesh_id, V, F, N)
             self._activate_new_object(mesh_id)
             self._show_only(mesh_id)
-            self.window.set_status("Готово: мэш построен", progress=100)
 
+            self.window.set_status("Готово: мэш построен", progress=100)
         except Exception as e:
             self.window.set_status("Ошибка реконструкции", progress=0)
             QMessageBox.critical(self.window, "Ошибка реконструкции", str(e))
+        finally:
+            self._restore_ui_after_reconstruction()
+
+    @Slot(str)
+    def _on_reconstruction_failed(self, message: str) -> None:
+        self.window.set_status("Ошибка реконструкции", progress=0)
+        QMessageBox.critical(self.window, "Ошибка реконструкции", message)
+        self._restore_ui_after_reconstruction()
+
+    def _restore_ui_after_reconstruction(self) -> None:
+        # вернуть обычный прогрессбар и кнопку
+        try:
+            self.window.progress.setRange(0, 100)
+            self.window.progress.setValue(0)
+        except Exception:
+            pass
+        self.window.act_build_mesh.setEnabled(True)
+
+    @Slot()
+    def _cleanup_reconstruction_thread(self) -> None:
+        # освобождаем ссылки после остановки потока
+        self._recon_worker = None
+        self._recon_thread = None
+
     
     def apply_filter(self) -> None:
         if not self._current_cloud_id:
