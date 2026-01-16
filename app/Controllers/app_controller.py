@@ -28,6 +28,47 @@ class ImportedObject:
     kind: str
     path: str
 
+class FilterWorker(QObject):
+    """
+    Фоновая фильтрация облака, чтобы UI не зависал.
+    """
+    finished = Signal(object, object)  # pcd_filtered (o3d), pts_preview (np.ndarray)
+    failed = Signal(str)
+
+    def __init__(self, pcd: o3d.geometry.PointCloud, settings: FilterSettings | None) -> None:
+        super().__init__()
+        self._pcd = pcd
+        self._settings = settings
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            import numpy as np
+            from app.Infrastructure.filtering_adapter import filter_pcd
+
+            pcd_local = o3d.geometry.PointCloud(self._pcd)
+
+            pcd2 = filter_pcd(pcd_local, settings=self._settings)
+
+            pts = np.asarray(pcd2.points)
+            if pts.shape[0] == 0:
+                raise RuntimeError("Пустое облако после фильтрации")
+
+            # превью для Viewer (как у тебя)
+            max_preview = 2_000_000
+            if pts.shape[0] > max_preview:
+                idx = np.random.choice(pts.shape[0], size=max_preview, replace=False)
+                pts_preview = pts[idx]
+            else:
+                pts_preview = pts
+
+            pts_preview = pts_preview - pts_preview.mean(axis=0)
+            pts_preview = pts_preview.astype(np.float32, copy=False)
+
+            self.finished.emit(pcd2, pts_preview)
+        except Exception as e:
+            self.failed.emit(str(e))
+
 
 class ReconstructionWorker(QObject):
     """
@@ -77,6 +118,50 @@ class AppController(QObject):
         self._recon_thread: QThread | None = None
         self._recon_worker: ReconstructionWorker | None = None
 
+        self._filter_thread: QThread | None = None
+        self._filter_worker: FilterWorker | None = None
+        self._filter_target_cloud_id: str | None = None
+
+    @Slot(object, object)
+    def _on_filter_done(self, pcd2, pts_preview) -> None:
+        try:
+            cloud_id = self._filter_target_cloud_id
+            if not cloud_id:
+                return
+
+            self._cloud_o3d_by_id[cloud_id] = pcd2
+            self._cloud_preview_by_id[cloud_id] = pts_preview
+
+            # обновить показ (в GUI потоке)
+            self.window.viewer.show_point_cloud(cloud_id, pts_preview)
+            self._show_only(cloud_id)
+
+            self.window.set_status(f"Фильтрация завершена (точек: {len(pcd2.points):,})", progress=100)
+        except Exception as e:
+            self.window.set_status("Ошибка фильтрации", progress=0)
+            QMessageBox.critical(self.window, "Ошибка фильтрации", str(e))
+        finally:
+            self._restore_ui_after_filter()
+
+    @Slot(str)
+    def _on_filter_failed(self, message: str) -> None:
+        self.window.set_status("Ошибка фильтрации", progress=0)
+        QMessageBox.critical(self.window, "Ошибка фильтрации", message)
+        self._restore_ui_after_filter()
+
+    def _restore_ui_after_filter(self) -> None:
+        try:
+            self.window.progress.setRange(0, 100)
+            self.window.progress.setValue(0)
+        except Exception:
+            pass
+        self.window.act_filter.setEnabled(True)
+
+    @Slot()
+    def _cleanup_filter_thread(self) -> None:
+        self._filter_worker = None
+        self._filter_thread = None
+        self._filter_target_cloud_id = None
 
 
     def bind(self, window) -> None:
@@ -418,40 +503,41 @@ class AppController(QObject):
             QMessageBox.information(self.window, "Нет данных", "Выберите облако точек в дереве.")
             return
 
+        # не даём запускать несколько фильтраций одновременно
+        if self._filter_thread is not None and self._filter_thread.isRunning():
+            QMessageBox.information(self.window, "Фильтрация", "Фильтрация уже выполняется.")
+            return
+
+        cloud_id = self._current_cloud_id
+        pcd = self._cloud_o3d_by_id.get(cloud_id)
+        if pcd is None:
+            QMessageBox.critical(self.window, "Ошибка фильтрации", "Не найдено облако по выбранному id.")
+            return
+
+        # UI: показываем "занято" и блокируем кнопку
         try:
-            import numpy as np
-            from app.Infrastructure.filtering_adapter import filter_pcd
+            self.window.progress.setRange(0, 0)  # бесконечный прогресс
+        except Exception:
+            pass
+        self.window.set_status("Фильтрация…", progress=0)
+        self.window.act_filter.setEnabled(False)
 
-            self.window.set_status("Фильтрация…", progress=20)
+        self._filter_target_cloud_id = cloud_id
 
-            pcd = self._cloud_o3d_by_id[self._current_cloud_id]
+        # --- Запускаем фильтрацию в отдельном потоке ---
+        self._filter_thread = QThread()
+        self._filter_worker = FilterWorker(pcd, self._filter_settings)
+        self._filter_worker.moveToThread(self._filter_thread)
 
-            # параметры как в твоём filtering.py
-            pcd2 = filter_pcd(pcd, settings=self._filter_settings)
+        self._filter_thread.started.connect(self._filter_worker.run)
 
-            self._cloud_o3d_by_id[self._current_cloud_id] = pcd2
+        # важно: QueuedConnection, чтобы UI-слоты гарантированно были в GUI потоке
+        self._filter_worker.finished.connect(self._on_filter_done, Qt.QueuedConnection)
+        self._filter_worker.failed.connect(self._on_filter_failed, Qt.QueuedConnection)
 
-            pts = np.asarray(pcd2.points)
-            if pts.shape[0] == 0:
-                raise RuntimeError("Пустое облако после фильтрации")
-
-            # превью для Viewer
-            max_preview = 2_000_000
-            if pts.shape[0] > max_preview:
-                idx = np.random.choice(pts.shape[0], size=max_preview, replace=False)
-                pts_preview = pts[idx]
-            else:
-                pts_preview = pts
-
-            pts_preview = pts_preview - pts_preview.mean(axis=0)
-            pts_preview = pts_preview.astype(np.float32, copy=False)
-            self._cloud_preview_by_id[self._current_cloud_id] = pts_preview
-
-            # обновить показ
-            self.window.viewer.show_point_cloud(self._current_cloud_id, pts_preview)
-
-            self.window.set_status(f"Фильтрация завершена (точек: {len(pcd2.points):,})", progress=100)
-
-        except Exception as e:
-            self.window.set_status("Ошибка фильтрации", progress=0)
-            QMessageBox.critical(self.window, "Ошибка фильтрации", str(e))
+        # корректное завершение
+        self._filter_worker.finished.connect(self._filter_thread.quit)
+        self._filter_worker.failed.connect(self._filter_thread.quit)
+        self._filter_thread.finished.connect(self._cleanup_filter_thread)
+        self._filter_thread.setPriority(QThread.LowPriority)
+        self._filter_thread.start()
